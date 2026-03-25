@@ -1,0 +1,17 @@
+.DS_Store
+.bsp/
+.idea/
+.metals/
+.scala-build/
+.vscode/
+
+target/
+project/target/
+project/project/
+
+generated/
+simWorkspace/
+test_run_dir/
+
+*.vcd
+*.fst
