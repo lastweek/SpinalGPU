@@ -1,0 +1,23 @@
+// Purpose: Store to a misaligned global address to provoke a load/store fault.
+// Primary feature: global_memory
+// Expected outcome: fault
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry misaligned_store(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<2>;
+
+    // Setup
+    ld.param.u32 %r0, [out_ptr_param];
+    mov.u32 %r1, 1;
+
+    // Core
+
+    // Fault trigger
+    st.global.u32 [%r0 + 2], %r1;
+    ret;
+}

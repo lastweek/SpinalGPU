@@ -27,6 +27,7 @@ class ArchitectureSkeletonSpec extends AnyFunSuite with Matchers {
       Path.of("AGENTS.md"),
       Path.of("docs/architecture.md"),
       Path.of("docs/isa.md"),
+      Path.of("docs/machine-encoding.md"),
       Path.of("kernels"),
       Path.of("docs/diagrams/sm-overview.mmd"),
       Path.of("docs/diagrams/dispatch-dataflow.mmd"),
@@ -40,6 +41,7 @@ class ArchitectureSkeletonSpec extends AnyFunSuite with Matchers {
     readme should include("AGENTS.md")
     readme should include("docs/architecture.md")
     readme should include("docs/isa.md")
+    readme should include("docs/machine-encoding.md")
     readme should include("docs/diagrams/sm-overview.mmd")
     readme should include("docs/diagrams/dispatch-dataflow.mmd")
     readme should include("docs/diagrams/memory-hierarchy-axi.mmd")

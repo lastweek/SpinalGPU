@@ -3,6 +3,8 @@ package spinalgpu
 import spinal.lib.bus.amba4.axi.sim.AxiMemorySim
 import spinalgpu.toolchain.KernelArtifact
 import spinalgpu.toolchain.KernelCatalog
+import spinalgpu.toolchain.KernelFeature
+import spinalgpu.toolchain.KernelLevel
 
 object KernelManifest {
   sealed trait HarnessTarget
@@ -29,6 +31,10 @@ object KernelManifest {
   ) {
     val name: String = artifact.name
     val relativeSourcePath: String = artifact.relativeSourcePath
+    val primaryFeature: KernelFeature = artifact.primaryFeature
+    val secondaryFeatures: Seq[KernelFeature] = artifact.secondaryFeatures
+    val teachingLevel: KernelLevel = artifact.teachingLevel
+    val description: String = artifact.description
     val sourcePath = artifact.sourcePath
     val binaryPath = artifact.binaryPath
   }
@@ -114,6 +120,19 @@ object KernelManifest {
     harnessTargets = Seq(StreamingMultiprocessor)
   )
 
+  val registerStress: KernelCase = KernelCase(
+    artifact = KernelCatalog.registerStress,
+    entryPc = 0x100,
+    launch = ExecutionTestUtils.HostLaunch(entryPc = 0x100, blockDimX = 1, argBase = 0x2C0),
+    preload = (memory, byteCount) => {
+      ExecutionTestUtils.writeArgBuffer(memory, 0x2C0, Seq(0x800), byteCount)
+    },
+    expectation = Success { (memory, byteCount) =>
+      assertSequence(memory, 0x800, (100 to 128) :+ 0x800, byteCount)
+    },
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
   val nonUniformBranch: KernelCase = KernelCase(
     artifact = KernelCatalog.nonUniformBranch,
     entryPc = 0x100,
@@ -147,6 +166,7 @@ object KernelManifest {
     uniformLoop,
     sharedRoundtrip,
     vectorAdd1Warp,
+    registerStress,
     nonUniformBranch,
     misalignedStore,
     trap

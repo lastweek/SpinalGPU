@@ -1,12 +1,15 @@
 package spinalgpu
 
+import java.nio.file.Files
 import java.nio.file.Path
 import scala.math.BigInt
 import spinal.core.ClockDomain
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
 import spinal.lib.bus.amba4.axilite.sim._
+import spinalgpu.toolchain.BuildKernelCorpus
 import spinalgpu.toolchain.KernelBinaryIO
+import spinalgpu.toolchain.KernelCatalog
 
 object ExecutionTestUtils {
   final case class HostLaunch(
@@ -27,6 +30,16 @@ object ExecutionTestUtils {
     memory.memory.readBigInt(address, byteCount)
   }
 
+  @volatile private var kernelCorpusReady: Boolean = false
+
+  def ensureKernelCorpusBuilt(): Unit = synchronized {
+    val missingBinary = KernelCatalog.all.exists(artifact => !Files.exists(artifact.binaryPath))
+    if (!kernelCorpusReady || missingBinary) {
+      BuildKernelCorpus.buildAll()
+      kernelCorpusReady = true
+    }
+  }
+
   def loadBinary(memory: AxiMemorySim, baseAddress: Long, words: Seq[Int], byteCount: Int): Unit = {
     words.zipWithIndex.foreach { case (word, index) =>
       writeWord(memory, baseAddress + (index.toLong * byteCount), u32(word), byteCount)
@@ -34,6 +47,9 @@ object ExecutionTestUtils {
   }
 
   def loadBinaryFile(memory: AxiMemorySim, baseAddress: Long, path: Path, byteCount: Int): Unit = {
+    if (path.normalize.startsWith(KernelCatalog.outputRoot) && !Files.exists(path)) {
+      ensureKernelCorpusBuilt()
+    }
     loadBinary(memory, baseAddress, KernelBinaryIO.readWords(path), byteCount)
   }
 

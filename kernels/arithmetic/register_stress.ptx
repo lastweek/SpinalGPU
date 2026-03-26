@@ -1,0 +1,81 @@
+// Purpose: Store one value from every allocatable PTX register to global memory.
+// Primary feature: arithmetic
+// Expected outcome: success
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry register_stress(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<30>;
+
+    // Setup
+    ld.param.u32 %r29, [out_ptr_param];
+
+    // Core
+    mov.u32 %r0, 100;
+    mov.u32 %r1, 101;
+    mov.u32 %r2, 102;
+    mov.u32 %r3, 103;
+    mov.u32 %r4, 104;
+    mov.u32 %r5, 105;
+    mov.u32 %r6, 106;
+    mov.u32 %r7, 107;
+    mov.u32 %r8, 108;
+    mov.u32 %r9, 109;
+    mov.u32 %r10, 110;
+    mov.u32 %r11, 111;
+    mov.u32 %r12, 112;
+    mov.u32 %r13, 113;
+    mov.u32 %r14, 114;
+    mov.u32 %r15, 115;
+    mov.u32 %r16, 116;
+    mov.u32 %r17, 117;
+    mov.u32 %r18, 118;
+    mov.u32 %r19, 119;
+    mov.u32 %r20, 120;
+    mov.u32 %r21, 121;
+    mov.u32 %r22, 122;
+    mov.u32 %r23, 123;
+    mov.u32 %r24, 124;
+    mov.u32 %r25, 125;
+    mov.u32 %r26, 126;
+    mov.u32 %r27, 127;
+    mov.u32 %r28, 128;
+
+    st.global.u32 [%r29 + 0], %r0;
+    st.global.u32 [%r29 + 4], %r1;
+    st.global.u32 [%r29 + 8], %r2;
+    st.global.u32 [%r29 + 12], %r3;
+    st.global.u32 [%r29 + 16], %r4;
+    st.global.u32 [%r29 + 20], %r5;
+    st.global.u32 [%r29 + 24], %r6;
+    st.global.u32 [%r29 + 28], %r7;
+    st.global.u32 [%r29 + 32], %r8;
+    st.global.u32 [%r29 + 36], %r9;
+    st.global.u32 [%r29 + 40], %r10;
+    st.global.u32 [%r29 + 44], %r11;
+    st.global.u32 [%r29 + 48], %r12;
+    st.global.u32 [%r29 + 52], %r13;
+    st.global.u32 [%r29 + 56], %r14;
+    st.global.u32 [%r29 + 60], %r15;
+    st.global.u32 [%r29 + 64], %r16;
+    st.global.u32 [%r29 + 68], %r17;
+    st.global.u32 [%r29 + 72], %r18;
+    st.global.u32 [%r29 + 76], %r19;
+    st.global.u32 [%r29 + 80], %r20;
+    st.global.u32 [%r29 + 84], %r21;
+    st.global.u32 [%r29 + 88], %r22;
+    st.global.u32 [%r29 + 92], %r23;
+    st.global.u32 [%r29 + 96], %r24;
+    st.global.u32 [%r29 + 100], %r25;
+    st.global.u32 [%r29 + 104], %r26;
+    st.global.u32 [%r29 + 108], %r27;
+    st.global.u32 [%r29 + 112], %r28;
+    st.global.u32 [%r29 + 116], %r29;
+
+    // Exit
+    ret;
+}

@@ -1,0 +1,16 @@
+// Purpose: Raise an explicit trap.
+// Primary feature: control
+// Expected outcome: fault
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry trap()
+{
+    // Setup
+
+    // Core
+
+    // Fault trigger
+    trap;
+}

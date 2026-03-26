@@ -10,7 +10,7 @@ val spinalLib = "com.github.spinalhdl" %% "spinalhdl-lib" % spinalVersion
 val spinalIdslPlugin =
   compilerPlugin("com.github.spinalhdl" %% "spinalhdl-idsl-plugin" % spinalVersion)
 val scalaTest = "org.scalatest" %% "scalatest" % scalaTestVersion % Test
-val buildKernelCorpus = taskKey[Unit]("Build the standalone kernel corpus into generated/kernels")
+val buildKernelCorpus = taskKey[Unit]("Compile the PTX kernel corpus into generated/kernels")
 
 lazy val root = (project in file("."))
   .settings(

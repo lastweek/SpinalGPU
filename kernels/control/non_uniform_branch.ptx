@@ -1,0 +1,24 @@
+// Purpose: Branch on lane-varying state to provoke a non-uniform branch fault.
+// Primary feature: control
+// Expected outcome: fault
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry non_uniform_branch()
+{
+    .reg .u32 %r<1>;
+    .pred %p<1>;
+
+    // Setup
+    mov.u32 %r0, %tid.x;
+
+    // Core
+    setp.ne.u32 %p0, %r0, 0;
+
+    // Fault trigger
+    @%p0 bra taken;
+    ret;
+taken:
+    ret;
+}

@@ -1,8 +1,0 @@
-; Write a constant arithmetic result to global memory and exit.
-s2r r1, %argbase
-ldg r2, [r1 + 0]
-movi r3, 7
-movi r4, 11
-add r5, r3, r4
-stg [r2 + 0], r5
-exit

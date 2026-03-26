@@ -1,0 +1,28 @@
+// Purpose: Run a uniform countdown loop and store the terminal value.
+// Primary feature: control
+// Expected outcome: success
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry uniform_loop(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<3>;
+    .pred %p<1>;
+
+    // Setup
+    mov.u32 %r0, 3;
+
+    // Core
+loop:
+    add.u32 %r0, %r0, -1;
+    setp.ne.u32 %p0, %r0, 0;
+    @%p0 bra loop;
+    ld.param.u32 %r1, [out_ptr_param];
+    st.global.u32 [%r1], %r0;
+
+    // Exit
+    ret;
+}

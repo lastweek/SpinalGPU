@@ -5,7 +5,7 @@ import java.nio.file.Path
 object BuildKernelCorpus {
   def buildAll(outputRoot: Path = KernelCatalog.outputRoot): Seq[Path] = {
     KernelCatalog.all.map { artifact =>
-      val program = Assembler.assembleFile(artifact.sourcePath)
+      val program = PtxAssembler.assembleFile(artifact.sourcePath)
       val outputPath = outputRoot.resolve(artifact.relativeBinaryPath).normalize()
       KernelBinaryIO.writeWords(outputPath, program.words)
       outputPath

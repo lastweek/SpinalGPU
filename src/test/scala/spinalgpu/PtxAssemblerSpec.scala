@@ -1,0 +1,156 @@
+package spinalgpu
+
+import java.nio.file.Files
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.matchers.should.Matchers
+import spinalgpu.toolchain.BuildKernelCorpus
+import spinalgpu.toolchain.KernelBinaryIO
+import spinalgpu.toolchain.PtxAssembler
+
+class PtxAssemblerSpec extends AnyFunSuite with Matchers {
+  test("lowers entry headers and ld.param to machine words") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry load_arg(
+        |    .param .u32 out_ptr
+        |)
+        |{
+        |    .reg .u32 %r<1>;
+        |
+        |    ld.param.u32 %r0, [out_ptr];
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 2, specialRegister = SpecialRegisterKind.ArgBase),
+      Isa.encodeMem(Opcode.LDG, reg = 1, base = 2, offset = 0),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("resolves labels and lowers predicated branches from predicate registers") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry branch_test()
+        |{
+        |    .reg .u32 %r<1>;
+        |    .pred %p<1>;
+        |
+        |    mov.u32 %r0, %tid.x;
+        |    setp.ne.u32 %p0, %r0, 0;
+        |    @%p0 bra taken;
+        |    ret;
+        |taken:
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.labels("taken") shouldBe 24
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 1, specialRegister = SpecialRegisterKind.TidX),
+      Isa.encodeRrr(Opcode.SETEQ, rd = 2, rs0 = 1, rs1 = 0),
+      Isa.encodeRri(Opcode.MOVI, rd = 3, rs0 = 0, immediate = 1),
+      Isa.encodeRrr(Opcode.XOR, rd = 2, rs0 = 2, rs1 = 3),
+      Isa.encodeBr(Opcode.BRNZ, rs0 = 2, offset = 4),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("lowers shared symbols to byte offsets in shared-memory instructions") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry shared_test()
+        |{
+        |    .reg .u32 %r<2>;
+        |    .shared .align 4 .b8 pad[4];
+        |    .shared .align 4 .b8 shared_data[16];
+        |
+        |    ld.shared.u32 %r0, [shared_data + %r1];
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeMem(Opcode.LDS, reg = 1, base = 2, offset = 4),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("rejects unsupported PTX constructs") {
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .const .align 4 .b8 const_data[16];
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u32 %r<1>
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    call foo;
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+  }
+
+  test("kernel corpus builder emits raw little-endian binaries from PTX sources") {
+    val outputRoot = Files.createTempDirectory("kernel-corpus")
+
+    val outputPaths =
+      try {
+        BuildKernelCorpus.buildAll(outputRoot)
+      } finally {
+        ()
+      }
+
+    outputPaths should not be empty
+    outputPaths.foreach(path => Files.exists(path) shouldBe true)
+
+    val firstWords = KernelBinaryIO.readWords(outputPaths.head)
+    firstWords should not be empty
+  }
+}

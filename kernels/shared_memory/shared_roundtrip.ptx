@@ -1,0 +1,28 @@
+// Purpose: Round-trip %tid.x through shared memory and write it to global memory.
+// Primary feature: shared_memory
+// Expected outcome: success
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry shared_roundtrip(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<5>;
+    .shared .align 4 .b8 shared_data[256];
+
+    // Setup
+    ld.param.u32 %r0, [out_ptr_param];
+    mov.u32 %r1, %tid.x;
+
+    // Core
+    shl.b32 %r2, %r1, 2;
+    st.shared.u32 [shared_data + %r2], %r1;
+    ld.shared.u32 %r3, [shared_data + %r2];
+    add.u32 %r4, %r0, %r2;
+    st.global.u32 [%r4], %r3;
+
+    // Exit
+    ret;
+}

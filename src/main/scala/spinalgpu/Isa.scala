@@ -1,5 +1,7 @@
 package spinalgpu
 
+// Internal SpinalGPU machine encoding used as the lowering target for the
+// programmer-visible PTX subset ISA.
 object Opcode {
   val NOP = 0x00
   val MOV = 0x01

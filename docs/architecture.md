@@ -1,10 +1,11 @@
 # SM Architecture and Frontend
 
-This repository now exposes a single-SM architecture with a real launch, fetch, decode, and writeback frontend on top of the original architecture skeleton.
+This repository exposes a single-SM architecture with a real launch, fetch, decode, and writeback frontend. The public software contract is a PTX subset ISA; the hardware executes a custom SpinalGPU machine encoding generated from that PTX subset.
 
 ## Summary
 
 - `GpuTop` wraps one `StreamingMultiprocessor`, exposes a top-level AXI4 memory boundary for unified code/data memory, and exposes AXI-Lite MMIO for launch and status control.
+- PTX subset source is compiled ahead of time into raw SpinalGPU `.bin` machine code.
 - The SM is composed from concrete submodules with stable typed interfaces:
   - `KernelControlBlock`
   - `LaunchController`
@@ -28,7 +29,7 @@ This repository now exposes a single-SM architecture with a real launch, fetch, 
 
 ## Program Loading Model
 
-- Kernel code, argument buffers, and global data all live in unified external memory.
+- Compiled machine code, argument buffers, and global data all live in unified external memory.
 - The host writes a prebuilt raw kernel binary and any data buffers into external memory before launch.
 - AXI-Lite MMIO provides the launch metadata:
   - `ENTRY_PC`
@@ -37,8 +38,8 @@ This repository now exposes a single-SM architecture with a real launch, fetch, 
   - `ARG_BASE`
   - `SHARED_BYTES`
 - The `LaunchController` turns one block launch into resident warp contexts.
-- The warp table stores runtime state only. It does not store source text, program instructions, or a decoded kernel image.
-- The scheduler selects a runnable warp, the fetch unit reads the instruction at that warp’s `pc`, and the decode/issue path sends the work to the correct unit.
+- The warp table stores runtime state only. It does not store PTX source text or a decoded kernel image.
+- The scheduler selects a runnable warp, the fetch unit reads the machine instruction at that warp’s `pc`, and the decode/issue path sends the work to the correct unit.
 
 ## Module Responsibilities
 
@@ -49,7 +50,7 @@ This repository now exposes a single-SM architecture with a real launch, fetch, 
 | `WarpStateTable` | Holds resident warp runtime context | Runtime-only context, no program storage |
 | `WarpScheduler` | Chooses the next runnable warp | Picks the lowest-index runnable warp |
 | `InstructionFetchUnit` | Reads 32-bit instructions from external memory | Aligned word fetch only |
-| `DecodeUnit` | Classifies instruction words and extracts operands/immediates | PTX-inspired custom ISA decode |
+| `DecodeUnit` | Classifies machine instruction words and extracts operands/immediates | SpinalGPU machine-code decode for the PTX subset ISA |
 | `WarpRegisterFile` | Holds per-thread registers for resident warps | 32 registers per thread, `r0 = 0` |
 | `CudaCoreArray` | Handles integer arithmetic issue class | Full-warp semantic execution |
 | `LoadStoreUnit` | Routes warp memory ops to shared or external memory | Per-lane serialized memory access |
@@ -78,19 +79,45 @@ This repository now exposes a single-SM architecture with a real launch, fetch, 
 - `Stream` is used when backpressure matters.
 - `Flow` is used for debug observability.
 - Kernel launch/status CSRs live behind an AXI-Lite control block at the top level.
-- Unified external memory holds code, arguments, and global data.
+- Unified external memory holds machine code, arguments, and global data.
 - Fetch and LSU share one external memory path through an internal arbiter.
 - AXI stays at the top-level memory boundary, not inside every SM block.
 
-## ISA
+## ISA Layers
 
-- ISA reference: [isa.md](isa.md)
-- Execution frontend supports:
-  - fixed 32-bit instruction words
-  - PTX-inspired special registers
+- Public ISA reference: [isa.md](isa.md)
+- Internal encoding reference: [machine-encoding.md](machine-encoding.md)
+- The current frontend supports:
+  - PTX subset source compiled ahead of time
+  - fixed 32-bit machine instruction words
+  - PTX-visible special registers such as `%tid.x`
   - integer ALU ops
-  - shared/global load/store
+  - shared/global load/store plus `.param` lowering
   - uniform branch, exit, and trap
+
+## PTX Corpus Structure
+
+- The teaching corpus is organized by primary feature rather than by pass/fault status:
+  - `kernels/arithmetic/`
+  - `kernels/control/`
+  - `kernels/global_memory/`
+  - `kernels/shared_memory/`
+  - `kernels/special_registers/`
+- Outcome remains a manifest concern. Success and fault expectations live in typed kernel metadata plus test expectations, not in directory names.
+- "Layers" or "modules" in the kernel corpus mean repository structure and file sections only. The PTX subset still does not support includes, imports, macros, or multi-entry source files.
+
+## PTX Teaching Template
+
+- Each PTX source follows the same readable template:
+  - `// Purpose:`
+  - `// Primary feature:`
+  - `// Expected outcome:`
+  - `.version`, `.target`, `.address_size`
+  - one `.visible .entry` signature
+  - declarations ordered as `.reg`, then `.pred`, then `.shared`
+  - `// Setup`
+  - `// Core`
+  - `// Exit` or `// Fault trigger`
 
 ## Diagrams
 
@@ -178,6 +205,9 @@ Source: [diagrams/frontend-execution.mmd](diagrams/frontend-execution.mmd)
 ```mermaid
 flowchart LR
   HOST[Host Test Harness]
+  PTX[PTX Subset Source]
+  TOOLCHAIN[PtxAssembler]
+  BIN[SpinalGPU Machine Code]
   CSR[AXI-Lite Control]
   GPU[GpuTop]
   KCB[KernelControlBlock]
@@ -190,6 +220,7 @@ flowchart LR
   EXEC[CUDA / LSU / SFU / Tensor]
   MEM[Unified External Memory]
 
+  PTX --> TOOLCHAIN --> BIN --> MEM
   HOST --> CSR --> GPU
   GPU --> KCB --> LC --> WST
   WST --> SCH --> IFU --> DEC --> RF --> EXEC

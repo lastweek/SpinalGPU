@@ -1,6 +1,0 @@
-; Branch on lane-varying state to provoke a v1 non-uniform branch fault.
-s2r r1, %tid.x
-brnz r1, taken
-exit
-taken:
-exit

@@ -1,9 +1,0 @@
-; Store each thread's %tid.x to global memory.
-s2r r1, %argbase
-ldg r2, [r1 + 0]
-s2r r3, %tid.x
-movi r4, 2
-shl r5, r3, r4
-add r6, r2, r5
-stg [r6 + 0], r3
-exit

@@ -324,6 +324,48 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
     }
   }
 
+  test("register_stress kernel from the corpus completes and writes the full register vector") {
+    val kernel = KernelManifest.registerStress
+
+    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.clockDomain.assertReset()
+      dut.io.control.start #= false
+      dut.io.control.clearDone #= false
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      memory.start()
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
+
+      pulseStart(dut)
+
+      var cycles = 0
+      while (!dut.io.control.status.done.toBoolean && cycles < 10000) {
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+      assert(dut.io.control.status.done.toBoolean, s"register_stress did not complete after $cycles cycles")
+      dut.io.control.status.fault.toBoolean shouldBe false
+
+      kernel.expectation match {
+        case success: KernelManifest.CompletionExpectation.Success =>
+          success.assertResults(memory, config.byteCount)
+        case _ =>
+          fail("register_stress should be a success case")
+      }
+
+      memory.stop()
+    }
+  }
+
   test("misaligned fetch traps and latches fault status") {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)

@@ -4,7 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 class IsaSpec extends AnyFunSuite with Matchers {
-  test("encodes and decodes representative instructions for every format") {
+  test("encodes and decodes representative machine instructions for every format") {
     val rrr = Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)
     val rri = Isa.encodeRri(Opcode.ADDI, rd = 4, rs0 = 5, immediate = -7)
     val mem = Isa.encodeMem(Opcode.LDG, reg = 6, base = 7, offset = 12)
@@ -45,7 +45,7 @@ class IsaSpec extends AnyFunSuite with Matchers {
     decodedSys.specialRegister shouldBe SpecialRegisterKind.TidX
   }
 
-  test("disassembler formats representative instructions") {
+  test("machine-code disassembler formats representative instructions") {
     Isa.disassemble(Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)) shouldBe "add r3, r1, r2"
     Isa.disassemble(Isa.encodeRri(Opcode.ADDI, rd = 4, rs0 = 5, immediate = -7)) shouldBe "addi r4, r5, -7"
     Isa.disassemble(Isa.encodeMem(Opcode.LDG, reg = 6, base = 7, offset = 12)) shouldBe "ldg r6, [r7 + 12]"
@@ -55,7 +55,7 @@ class IsaSpec extends AnyFunSuite with Matchers {
     Isa.disassemble(Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)) shouldBe "exit"
   }
 
-  test("decoder rejects unknown opcodes") {
+  test("machine-code decoder rejects unknown opcodes") {
     an[IllegalArgumentException] shouldBe thrownBy {
       Isa.decodeWord(0x7F000000)
     }
