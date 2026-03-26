@@ -1,0 +1,21 @@
+flowchart LR
+  HOST[Host Test Harness]
+  CSR[AXI-Lite Control]
+  GPU[GpuTop]
+  KCB[KernelControlBlock]
+  LC[LaunchController]
+  WST[WarpStateTable]
+  SCH[WarpScheduler]
+  IFU[InstructionFetchUnit]
+  DEC[DecodeUnit]
+  RF[WarpRegisterFile]
+  EXEC[CUDA / LSU / SFU / Tensor]
+  MEM[Unified External Memory]
+
+  HOST --> CSR --> GPU
+  GPU --> KCB --> LC --> WST
+  WST --> SCH --> IFU --> DEC --> RF --> EXEC
+  IFU --> MEM
+  EXEC --> MEM
+  EXEC --> RF
+  EXEC --> WST

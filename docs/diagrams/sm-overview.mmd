@@ -1,0 +1,23 @@
+flowchart LR
+  GpuTop[GpuTop]
+  AXI[AXI4 Memory Boundary]
+  SM[StreamingMultiprocessor]
+  WST[WarpStateTable]
+  SCH[WarpScheduler]
+  CUDA[CudaCoreArray]
+  LSU[LoadStoreUnit]
+  SFU[SpecialFunctionUnit]
+  TENSOR[TensorCoreBlock]
+  SHMEM[SharedMemory]
+  ADAPTER[ExternalMemoryAxiAdapter]
+
+  GpuTop --> SM
+  SM --> WST
+  SM --> SCH
+  SM --> CUDA
+  SM --> LSU
+  SM --> SFU
+  SM --> TENSOR
+  LSU --> SHMEM
+  LSU --> ADAPTER
+  ADAPTER --> AXI

@@ -1,0 +1,13 @@
+flowchart LR
+  LSU[LoadStoreUnit]
+  SHMEM[SharedMemory]
+  EXREQ[ExternalMemReq/Rsp]
+  AXIADAPT[ExternalMemoryAxiAdapter]
+  AXI[AXI4 Master Port]
+  MEM[External Memory Model / Controller]
+
+  LSU --> SHMEM
+  LSU --> EXREQ
+  EXREQ --> AXIADAPT
+  AXIADAPT --> AXI
+  AXI --> MEM

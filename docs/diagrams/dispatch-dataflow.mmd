@@ -1,0 +1,20 @@
+flowchart LR
+  WST[WarpStateTable]
+  SCH[WarpScheduler]
+  DISP[WarpDispatchReq]
+  CUDA[Cuda Issue Path]
+  LSU[LSU Issue Path]
+  SFU[SFU Issue Path]
+  TENSOR[Tensor Issue Path]
+  RSP[WarpDispatchRsp]
+
+  WST --> SCH
+  SCH --> DISP
+  DISP --> CUDA
+  DISP --> LSU
+  DISP --> SFU
+  DISP --> TENSOR
+  CUDA --> RSP
+  LSU --> RSP
+  SFU --> RSP
+  TENSOR --> RSP
