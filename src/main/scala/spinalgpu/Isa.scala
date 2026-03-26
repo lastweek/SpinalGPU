@@ -71,6 +71,11 @@ object SpecialRegisterKind {
   val CtaidX = 4
   val NctaidX = 5
   val ArgBase = 6
+  val NwarpId = 7
+  val SmId = 8
+  val NsmId = 9
+  val GridIdLo = 10
+  val GridIdHi = 11
 
   val names: Map[Int, String] = Map(
     TidX -> "%tid.x",
@@ -79,10 +84,26 @@ object SpecialRegisterKind {
     NtidX -> "%ntid.x",
     CtaidX -> "%ctaid.x",
     NctaidX -> "%nctaid.x",
-    ArgBase -> "%argbase"
+    ArgBase -> "%argbase",
+    NwarpId -> "%nwarpid",
+    SmId -> "%smid",
+    NsmId -> "%nsmid",
+    GridIdLo -> "%gridid.lo",
+    GridIdHi -> "%gridid.hi"
   )
 
-  val byName: Map[String, Int] = names.map(_.swap)
+  val byName: Map[String, Int] = Map(
+    "%tid.x" -> TidX,
+    "%laneid" -> LaneId,
+    "%warpid" -> WarpId,
+    "%ntid.x" -> NtidX,
+    "%ctaid.x" -> CtaidX,
+    "%nctaid.x" -> NctaidX,
+    "%argbase" -> ArgBase,
+    "%nwarpid" -> NwarpId,
+    "%smid" -> SmId,
+    "%nsmid" -> NsmId
+  )
 }
 
 object FaultCode {

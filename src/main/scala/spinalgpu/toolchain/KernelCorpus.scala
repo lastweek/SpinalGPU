@@ -169,6 +169,44 @@ object KernelCorpus {
     harnessTargets = Seq(StreamingMultiprocessor)
   )
 
+  val basicSpecialRegisterStore: KernelCase = KernelCase(
+    name = "basic_special_register_store",
+    relativeSourcePath = "special_registers/basic_special_register_store.ptx",
+    purpose = "Store the basic lane, warp, block, and SM special-register values to global memory.",
+    primaryFeature = SpecialRegisters,
+    secondaryFeatures = Seq(GlobalMemory),
+    teachingLevel = Core,
+    launch = HostLaunch(entryPc = 0x100, blockDimX = 40, argBase = 0x240),
+    timeoutCycles = 20000,
+    preloadOps = Seq(WriteArgBuffer(base = 0x240, values = Seq(0x500L))),
+    expectation = Success(
+      checks = Seq(
+        ExpectWords(base = 0x500, values = ((0 until 32) ++ (0 until 8)).map(_.toLong)),
+        ExpectWords(base = 0x5A0, values = Seq.fill(32)(0L) ++ Seq.fill(8)(1L)),
+        ExpectWords(base = 0x640, values = Seq.fill(40)(40L)),
+        ExpectWords(base = 0x6E0, values = Seq.fill(40)(0L)),
+        ExpectWords(base = 0x780, values = Seq.fill(40)(1L)),
+        ExpectWords(base = 0x820, values = Seq.fill(40)(2L)),
+        ExpectWords(base = 0x8C0, values = Seq.fill(40)(0L)),
+        ExpectWords(base = 0x960, values = Seq.fill(40)(1L))
+      )
+    ),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val gridIdStore: KernelCase = KernelCase(
+    name = "grid_id_store",
+    relativeSourcePath = "special_registers/grid_id_store.ptx",
+    purpose = "Store the current %gridid value to global memory.",
+    primaryFeature = SpecialRegisters,
+    secondaryFeatures = Seq(GlobalMemory),
+    teachingLevel = Core,
+    launch = HostLaunch(entryPc = 0x100, blockDimX = 1, argBase = 0x280),
+    preloadOps = Seq(WriteArgBuffer(base = 0x280, values = Seq(0xA00L))),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xA00, values = Seq(0L, 0L)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
   val uniformLoop: KernelCase = KernelCase(
     name = "uniform_loop",
     relativeSourcePath = "control/uniform_loop.ptx",
@@ -267,6 +305,8 @@ object KernelCorpus {
   val all: Seq[KernelCase] = Seq(
     addStoreExit,
     threadIdStore,
+    basicSpecialRegisterStore,
+    gridIdStore,
     uniformLoop,
     sharedRoundtrip,
     vectorAdd1Warp,

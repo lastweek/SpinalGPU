@@ -66,6 +66,64 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
     )
   }
 
+  test("lowers the extended 32-bit special-register reads") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry special_regs()
+        |{
+        |    .reg .u32 %r<3>;
+        |
+        |    mov.u32 %r0, %nwarpid;
+        |    mov.u32 %r1, %smid;
+        |    mov.u32 %r2, %nsmid;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 1, specialRegister = SpecialRegisterKind.NwarpId),
+      Isa.encodeSys(Opcode.S2R, rd = 2, specialRegister = SpecialRegisterKind.SmId),
+      Isa.encodeSys(Opcode.S2R, rd = 3, specialRegister = SpecialRegisterKind.NsmId),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("lowers mov.u64 %gridid and st.global.u64 through paired 32-bit machine operations") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry grid_id_store(
+        |    .param .u32 out_ptr
+        |)
+        |{
+        |    .reg .u32 %r<1>;
+        |    .reg .u64 %rd<1>;
+        |
+        |    ld.param.u32 %r0, [out_ptr];
+        |    mov.u64 %rd0, %gridid;
+        |    st.global.u64 [%r0], %rd0;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 4, specialRegister = SpecialRegisterKind.ArgBase),
+      Isa.encodeMem(Opcode.LDG, reg = 1, base = 4, offset = 0),
+      Isa.encodeSys(Opcode.S2R, rd = 2, specialRegister = SpecialRegisterKind.GridIdLo),
+      Isa.encodeSys(Opcode.S2R, rd = 3, specialRegister = SpecialRegisterKind.GridIdHi),
+      Isa.encodeMem(Opcode.STG, reg = 2, base = 1, offset = 0),
+      Isa.encodeMem(Opcode.STG, reg = 3, base = 1, offset = 4),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
   test("lowers shared symbols to byte offsets in shared-memory instructions") {
     val program = PtxAssembler.assemble(
       """.version 8.0
@@ -130,6 +188,40 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
           |.visible .entry bad()
           |{
           |    call foo;
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u64 %rd<1>;
+          |
+          |    mov.u64 %rd0, 1;
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u64 %rd<1>;
+          |
+          |    add.u64 %rd0, %rd0, %rd0;
           |    ret;
           |}
           |""".stripMargin

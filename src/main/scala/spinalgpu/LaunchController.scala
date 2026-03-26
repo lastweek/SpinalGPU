@@ -19,6 +19,7 @@ class LaunchController(config: SmConfig) extends Component {
     val kernelComplete = in Bool()
     val trapInfo = slave(Flow(TrapInfo(config)))
     val currentLaunch = out(KernelLaunchDesc(config))
+    val currentGridId = out(UInt(64 bits))
     val status = out(LaunchStatus(config))
   }
 
@@ -30,6 +31,8 @@ class LaunchController(config: SmConfig) extends Component {
   private val trapPendingValid = RegInit(False)
   private val trapPendingPc = Reg(UInt(config.addressWidth bits)) init (0)
   private val trapPendingCode = Reg(UInt(config.faultCodeWidth bits)) init (FaultCode.None)
+  private val currentGridId = Reg(UInt(64 bits)) init (0)
+  private val nextGridId = Reg(UInt(64 bits)) init (0)
 
   status.busy.init(False)
   status.done.init(False)
@@ -58,6 +61,7 @@ class LaunchController(config: SmConfig) extends Component {
   io.registerFileClear.valid := False
   io.registerFileClear.payload := initIndex
   io.currentLaunch := currentLaunch
+  io.currentGridId := currentGridId
   io.status := status
 
   private def laneMask(activeCount: UInt): Bits = {
@@ -96,6 +100,8 @@ class LaunchController(config: SmConfig) extends Component {
       status.faultPc := io.launch.entryPc
       status.faultCode := FaultCode.InvalidLaunch
     } otherwise {
+      currentGridId := nextGridId
+      nextGridId := nextGridId + 1
       status.busy := True
       initIndex := U(0, config.warpIdWidth bits)
       clearIssued := False

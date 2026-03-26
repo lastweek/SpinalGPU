@@ -138,6 +138,11 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   private val immediateUInt = decodeUnit.io.decoded.immediate.asUInt
   private val advancePc = (selectedContextReg.pc + U(4, config.addressWidth bits)).resized
   private val branchTarget = (advancePc + immediateUInt.resized).resized
+  private val blockWarpCount =
+    ((launchController.io.currentLaunch.blockDimX.resize(config.dataWidth) + U(config.warpSize - 1, config.dataWidth bits)) /
+      U(config.warpSize, config.dataWidth bits)).resized
+  private val gridIdLow = launchController.io.currentGridId(31 downto 0).resize(config.dataWidth)
+  private val gridIdHigh = launchController.io.currentGridId(63 downto 32).resize(config.dataWidth)
 
   private val specialValues = Vec(UInt(config.dataWidth bits), config.warpSize)
   for (lane <- 0 until config.warpSize) {
@@ -161,6 +166,21 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
       }
       is(U(SpecialRegisterKind.NctaidX, config.specialRegisterWidth bits)) {
         specialValues(lane) := 1
+      }
+      is(U(SpecialRegisterKind.NwarpId, config.specialRegisterWidth bits)) {
+        specialValues(lane) := blockWarpCount
+      }
+      is(U(SpecialRegisterKind.SmId, config.specialRegisterWidth bits)) {
+        specialValues(lane) := 0
+      }
+      is(U(SpecialRegisterKind.NsmId, config.specialRegisterWidth bits)) {
+        specialValues(lane) := 1
+      }
+      is(U(SpecialRegisterKind.GridIdLo, config.specialRegisterWidth bits)) {
+        specialValues(lane) := gridIdLow
+      }
+      is(U(SpecialRegisterKind.GridIdHi, config.specialRegisterWidth bits)) {
+        specialValues(lane) := gridIdHigh
       }
       is(U(SpecialRegisterKind.ArgBase, config.specialRegisterWidth bits)) {
         specialValues(lane) := launchController.io.currentLaunch.argBase.resize(config.dataWidth)

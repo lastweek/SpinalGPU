@@ -1,0 +1,24 @@
+// Purpose: Store the current %gridid value to global memory.
+// Primary feature: special_registers
+// Expected outcome: success
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry grid_id_store(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<1>;
+    .reg .u64 %rd<1>;
+
+    // Setup
+    ld.param.u32 %r0, [out_ptr_param];
+    mov.u64 %rd0, %gridid;
+
+    // Core
+    st.global.u64 [%r0], %rd0;
+
+    // Exit
+    ret;
+}

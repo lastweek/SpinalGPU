@@ -29,6 +29,7 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `PA3` | `PtxAssemblerSpec`: lowers shared symbols to byte offsets in shared-memory instructions |
 | `PA4` | `PtxAssemblerSpec`: rejects unsupported PTX constructs |
 | `PA5` | `PtxAssemblerSpec`: kernel corpus builder emits raw little-endian binaries from PTX sources |
+| `PA6` | `PtxAssemblerSpec`: lowers extended special-register reads plus narrow `%gridid` `.u64` materialization/store |
 | `KM1` | `KernelCorpusSpec`: kernel corpus references every `.ptx` file exactly once and generated binaries exist |
 | `KM2` | `KernelCorpusSpec`: kernel corpus metadata is complete and expectation types match teaching levels |
 | `KM3` | `KernelCorpusSpec`: PTX headers match declarative metadata and follow the teaching template |
@@ -43,7 +44,10 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `SM9` | `StreamingMultiprocessorSimSpec`: `misaligned_store` traps and latches fault status |
 | `SM10` | `StreamingMultiprocessorSimSpec`: `non_uniform_branch` traps and latches fault status |
 | `SM11` | `StreamingMultiprocessorSimSpec`: `trap` kernel traps and latches fault status |
+| `SM12` | `StreamingMultiprocessorSimSpec`: `basic_special_register_store` completes and writes expected builtin values |
+| `SM13` | `StreamingMultiprocessorSimSpec`: `grid_id_store` completes and writes the initial `%gridid` value |
 | `GT1` | `GpuTopSimSpec`: `GpuTop` exposes idle AXI memory and AXI-Lite control boundaries |
+| `GT2` | `ExecutionFrontendSimSpec`: `grid_id_store` increments across successive `GpuTop` launches |
 
 ## Compatibility Summary
 
@@ -51,10 +55,10 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | --- | --- | --- | --- |
 | Execution and launch model | `Partial` | `Direct` | Classic SIMT v1 on one SM, one block per launch, no divergent reconvergence support |
 | Module and entry contract | `Partial` | `Direct` | One `.visible .entry` per file, `.param .u32` only |
-| Types, registers, and predicates | `Partial` | `Direct` | `.u32` scalar integer path only; predicates are compiler-managed |
-| Special registers | `Partial` | `Direct` | `%tid.x` is exercised; other mapped PTX builtins lack direct tests |
-| Instruction surface | `Partial` | `Direct` | Integer, control, and narrow data-movement subset only |
-| Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only; aligned 32-bit words only |
+| Types, registers, and predicates | `Partial` | `Direct` | `.u32` scalar integer path plus narrow `.u64` `%gridid` materialization/store support; predicates are compiler-managed |
+| Special registers | `Partial` | `Direct` | Basic 32-bit SIMT/SM builtins are covered directly; `%gridid` is available only through a narrow `.u64` path |
+| Instruction surface | `Partial` | `Direct` | Integer, control, and narrow data-movement subset only; `.u64` support is limited to `%gridid` materialization and store |
+| Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only; aligned 32-bit words plus a lowered `st.global.u64` path |
 | Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, FP, SFU, tensor, sync, atomics, calls, and broad compiler-generated PTX remain out of scope |
 
 ## Execution And Launch Model
@@ -83,10 +87,11 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 
 | Capability | PTX requires | SpinalGPU status | Coverage | Evidence | Current notes |
 | --- | --- | --- | --- | --- | --- |
-| `.reg .u32` | PTX virtual registers for typed scalar values | `Implemented` | `Direct` | `PA1`, `KM3` | Only `.reg .u32 %r<N>;` declarations are accepted. |
+| `.reg .u32` | PTX virtual registers for typed scalar values | `Implemented` | `Direct` | `PA1`, `KM3` | `.reg .u32 %r<N>;` declarations are accepted. |
+| `.reg .u64` | PTX virtual registers for 64-bit scalar values | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `%gridid` materialization and `st.global.u64`; `.u64` arithmetic and loads remain unsupported. |
 | 32-bit scalar integer execution | A backend must provide typed scalar integer execution for the supported subset | `Implemented` | `Direct` | `SM4`, `SM5`, `SM7` | The current PTX-visible execution path is 32-bit integer only. |
 | `.pred` support | PTX uses predicate registers for condition evaluation and branch predication | `Partial` | `Direct` | `PA2`, `SM5`, `SM10` | Predicates lower to compiler-managed integer-backed condition values, not a native PTX-style predicate register file. |
-| Wider and alternate integer widths (`.u64`, `.s64`, `.u16`, `.u8`) | PTX supports multiple integer widths | `Rejected` | `None` | none | The frontend only accepts `.u32` declarations and `.u32` integer instructions. |
+| Wider and alternate integer widths beyond the narrow `%gridid` path (`.s64`, general `.u64`, `.u16`, `.u8`) | PTX supports multiple integer widths | `Rejected` | `Direct` | `PA4` | General non-`%gridid` wider integer support is still rejected by the frontend. |
 | Floating-point, vector, and packed/tensor data types (`.f32`, `.f64`, vectors, packed formats) | PTX supports scalar FP, vector, and packed element types | `Rejected` | `None` | none | No PTX-visible FP, vector, or packed-type execution path exists in v1. |
 
 ## Special Registers
@@ -94,7 +99,8 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | Capability | PTX requires | SpinalGPU status | Coverage | Evidence | Current notes |
 | --- | --- | --- | --- | --- | --- |
 | `%tid.x` | Thread index within the current block | `Implemented` | `Direct` | `PA2`, `SM3` | The assembler, machine encoding, and execution path are all exercised. |
-| `%laneid`, `%warpid`, `%ntid.x`, `%ctaid.x`, `%nctaid.x` | PTX exposes lane, warp, block, and grid builtins | `Implemented` | `None` | none | These builtins are accepted by the assembler and mapped in hardware, but no dedicated execution test proves them yet. |
+| `%laneid`, `%warpid`, `%ntid.x`, `%ctaid.x`, `%nctaid.x`, `%nwarpid`, `%smid`, `%nsmid` | PTX exposes lane, warp, block, and SM builtins | `Implemented` | `Direct` | `PA6`, `SM12` | These builtins are accepted by the assembler and mapped directly in hardware for the current one-SM architecture. |
+| `%gridid` | PTX exposes a temporal grid launch identifier | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only as `.u64` via `mov.u64 %rdX, %gridid`, backed by a launch counter and typically consumed with `st.global.u64`. |
 
 Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalGPU escape hatch for `.param` lowering. It is not part of the intended public PTX subset contract and is intentionally excluded from the matrix.
 
@@ -103,6 +109,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | Capability | PTX requires | SpinalGPU status | Coverage | Evidence | Current notes |
 | --- | --- | --- | --- | --- | --- |
 | `mov.u32` | Register moves, immediates, and builtin reads for scalar integer code | `Implemented` | `Direct` | `PA2`, `SM3`, `SM4` | Supports register, immediate, supported special-register, and shared-symbol source forms. |
+| `mov.u64` | 64-bit move for narrow builtin materialization | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `mov.u64 %rdX, %gridid`. Other `.u64` move forms are rejected. |
 | `add.u32` | Integer add in the scalar ALU path | `Implemented` | `Direct` | `SM4`, `SM5`, `SM7` | Register and immediate RHS forms are accepted. |
 | `sub.u32` | Integer subtract in the scalar ALU path | `Implemented` | `None` | none | Parsed and lowered to machine `sub`, but no current test exercises it directly. |
 | `mul.lo.u32` | Low 32-bit integer multiply | `Implemented` | `None` | none | Parsed and lowered to machine `mullo`, but no current test exercises it directly. |
@@ -121,6 +128,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | --- | --- | --- | --- | --- | --- |
 | `.param` plus `ld.param.u32` | Entry parameters must be addressable through the PTX parameter state space | `Partial` | `Direct` | `PA1`, `SM3`-`SM7` | Only entry-scope `.param .u32` is supported. It lowers onto the host-provided `ARG_BASE` buffer. |
 | `.global` plus `ld.global.u32` / `st.global.u32` | PTX global memory loads and stores | `Partial` | `Direct` | `SM3`, `SM4`, `SM5`, `SM7`, `SM9` | Only aligned 32-bit word accesses are supported. Misaligned accesses fault. |
+| `st.global.u64` | PTX may store 64-bit values to global memory | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `%gridid`-backed `.u64` registers. The assembler lowers it to two ordered `st.global.u32` machine stores. |
 | `.shared` declarations plus `ld.shared.u32` / `st.shared.u32` | PTX shared memory declarations and accesses | `Partial` | `Direct` | `PA3`, `SM6` | Declarations use `.shared .align N .b8 name[bytes];`. Execution supports 32-bit word accesses only. |
 | Byte-addressed addresses with aligned 32-bit words | PTX uses byte addresses across state spaces | `Partial` | `Direct` | `SM8`, `SM9` | Effective addresses are byte-based, but legal fetch/load/store access is aligned 32-bit only in v1. |
 | Shared symbol materialization via `mov.u32 %rX, shared_symbol` | PTX code may need to form a shared-space byte offset from a symbol | `Implemented` | `None` | none | The assembler lowers a shared symbol to its byte offset, but no dedicated test exercises this spelling. |

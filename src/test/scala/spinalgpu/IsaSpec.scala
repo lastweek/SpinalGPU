@@ -45,6 +45,19 @@ class IsaSpec extends AnyFunSuite with Matchers {
     decodedSys.specialRegister shouldBe SpecialRegisterKind.TidX
   }
 
+  test("encodes and decodes the extended special-register set") {
+    Isa.decodeWord(Isa.encodeSys(Opcode.S2R, rd = 10, specialRegister = SpecialRegisterKind.NwarpId)).specialRegister shouldBe
+      SpecialRegisterKind.NwarpId
+    Isa.decodeWord(Isa.encodeSys(Opcode.S2R, rd = 11, specialRegister = SpecialRegisterKind.SmId)).specialRegister shouldBe
+      SpecialRegisterKind.SmId
+    Isa.decodeWord(Isa.encodeSys(Opcode.S2R, rd = 12, specialRegister = SpecialRegisterKind.NsmId)).specialRegister shouldBe
+      SpecialRegisterKind.NsmId
+    Isa.decodeWord(Isa.encodeSys(Opcode.S2R, rd = 13, specialRegister = SpecialRegisterKind.GridIdLo)).specialRegister shouldBe
+      SpecialRegisterKind.GridIdLo
+    Isa.decodeWord(Isa.encodeSys(Opcode.S2R, rd = 14, specialRegister = SpecialRegisterKind.GridIdHi)).specialRegister shouldBe
+      SpecialRegisterKind.GridIdHi
+  }
+
   test("machine-code disassembler formats representative instructions") {
     Isa.disassemble(Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)) shouldBe "add r3, r1, r2"
     Isa.disassemble(Isa.encodeRri(Opcode.ADDI, rd = 4, rs0 = 5, immediate = -7)) shouldBe "addi r4, r5, -7"
@@ -52,6 +65,11 @@ class IsaSpec extends AnyFunSuite with Matchers {
     Isa.disassemble(Isa.encodeMem(Opcode.STG, reg = 6, base = 7, offset = 4)) shouldBe "stg [r7 + 4], r6"
     Isa.disassemble(Isa.encodeBr(Opcode.BRNZ, rs0 = 8, offset = -4)) shouldBe "brnz r8, -4"
     Isa.disassemble(Isa.encodeSys(Opcode.S2R, rd = 9, specialRegister = SpecialRegisterKind.TidX)) shouldBe "s2r r9, %tid.x"
+    Isa.disassemble(Isa.encodeSys(Opcode.S2R, rd = 10, specialRegister = SpecialRegisterKind.NwarpId)) shouldBe "s2r r10, %nwarpid"
+    Isa.disassemble(Isa.encodeSys(Opcode.S2R, rd = 11, specialRegister = SpecialRegisterKind.SmId)) shouldBe "s2r r11, %smid"
+    Isa.disassemble(Isa.encodeSys(Opcode.S2R, rd = 12, specialRegister = SpecialRegisterKind.NsmId)) shouldBe "s2r r12, %nsmid"
+    Isa.disassemble(Isa.encodeSys(Opcode.S2R, rd = 13, specialRegister = SpecialRegisterKind.GridIdLo)) shouldBe "s2r r13, %gridid.lo"
+    Isa.disassemble(Isa.encodeSys(Opcode.S2R, rd = 14, specialRegister = SpecialRegisterKind.GridIdHi)) shouldBe "s2r r14, %gridid.hi"
     Isa.disassemble(Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)) shouldBe "exit"
   }
 

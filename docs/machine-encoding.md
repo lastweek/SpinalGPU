@@ -67,6 +67,11 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and t
   - `%ntid.x`
   - `%ctaid.x`
   - `%nctaid.x`
+  - `%nwarpid`
+  - `%smid`
+  - `%nsmid`
+  - `%gridid.lo`
+  - `%gridid.hi`
   - `%argbase`
 
-`%argbase` is an internal lowering helper used by the PTX compiler to service `.param` loads. It is not part of the public PTX subset surface.
+`%gridid` is exposed publicly only through a narrow `.u64` PTX path and lowers to the internal `%gridid.lo` / `%gridid.hi` pair. `%argbase` is an internal lowering helper used by the PTX compiler to service `.param` loads and is not part of the public PTX subset surface.

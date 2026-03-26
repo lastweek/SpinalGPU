@@ -43,6 +43,19 @@ object PtxAssembler {
     }
   }
 
+  private final case class MoveWideSpecialInstruction(destination: String, source: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 2
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      require(source == "%gridid", s"mov.u64 only supports %gridid, got: $source")
+      val (rdLow, rdHigh) = layout.requireWideRegister(destination)
+      Seq(
+        Isa.encodeSys(Opcode.S2R, rd = rdLow, specialRegister = SpecialRegisterKind.GridIdLo),
+        Isa.encodeSys(Opcode.S2R, rd = rdHigh, specialRegister = SpecialRegisterKind.GridIdHi)
+      )
+    }
+  }
+
   private final case class BinaryInstruction(
       opcode: Int,
       immediateOpcode: Option[Int],
@@ -122,6 +135,26 @@ object PtxAssembler {
         case "shared" =>
           val (prefix, base, immediate) = lowerStandardMemoryAddress(destination, layout, context, allowSharedSymbol = true)
           prefix :+ Isa.encodeMem(Opcode.STS, reg = rs, base = base, offset = immediate)
+      }
+    }
+  }
+
+  private final case class StoreWideInstruction(addressSpace: String, destination: MemoryOperand, source: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int =
+      addressSpace match {
+        case "global" => lowerStandardMemoryAddress(destination, layout, context, allowSharedSymbol = false)._1.length + 2
+        case other => throw new IllegalArgumentException(s"unsupported 64-bit store address space: $other")
+      }
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      val (rsLow, rsHigh) = layout.requireWideRegister(source)
+      addressSpace match {
+        case "global" =>
+          val (prefix, base, immediate) = lowerStandardMemoryAddress(destination, layout, context, allowSharedSymbol = false)
+          prefix ++ Seq(
+            Isa.encodeMem(Opcode.STG, reg = rsLow, base = base, offset = immediate),
+            Isa.encodeMem(Opcode.STG, reg = rsHigh, base = base, offset = immediate + 4)
+          )
       }
     }
   }
@@ -214,12 +247,16 @@ object PtxAssembler {
   }
 
   private final case class RegisterLayout(
-      userRegisters: Map[String, Int],
+      scalarRegisters: Map[String, Int],
+      wideRegisters: Map[String, (Int, Int)],
       predicateRegisters: Map[String, Int],
       scratchRegister: Int
   ) {
     def requireRegister(name: String): Int =
-      userRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX register: $name"))
+      scalarRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX register: $name"))
+
+    def requireWideRegister(name: String): (Int, Int) =
+      wideRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX 64-bit register: $name"))
 
     def requirePredicate(name: String): Int =
       predicateRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX predicate: $name"))
@@ -230,7 +267,7 @@ object PtxAssembler {
 
   def assemble(source: String): AssembledProgram = {
     val parsed = parseModule(source)
-    val layout = allocateRegisters(parsed.declaredRegisterCount, parsed.declaredPredicateCount)
+    val layout = allocateRegisters(parsed.declaredScalarRegisterCount, parsed.declaredWideRegisterCount, parsed.declaredPredicateCount)
     val context = ModuleContext(parsed.paramOffsets, parsed.sharedOffsets)
     val labels = assignLabelAddresses(parsed.body, layout, context)
 
@@ -266,7 +303,8 @@ object PtxAssembler {
   }
 
   private final case class ParsedModule(
-      declaredRegisterCount: Int,
+      declaredScalarRegisterCount: Int,
+      declaredWideRegisterCount: Int,
       declaredPredicateCount: Int,
       paramOffsets: Map[String, Int],
       sharedOffsets: Map[String, Int],
@@ -279,7 +317,8 @@ object PtxAssembler {
     val sharedOffsets = mutable.LinkedHashMap.empty[String, Int]
     val body = mutable.ArrayBuffer.empty[BodyItem]
 
-    var declaredRegisterCount = 0
+    var declaredScalarRegisterCount = 0
+    var declaredWideRegisterCount = 0
     var declaredPredicateCount = 0
     var nextParamOffset = 0
     var nextSharedOffset = 0
@@ -408,9 +447,12 @@ object PtxAssembler {
             val statement = cleaned.dropRight(1).trim
             if (statement.startsWith(".reg ")) {
               val RegisterDecl = """\.reg\s+\.u32\s+%r<(\d+)>""".r
+              val WideRegisterDecl = """\.reg\s+\.u64\s+%rd<(\d+)>""".r
               statement match {
                 case RegisterDecl(count) =>
-                  declaredRegisterCount += count.toInt
+                  declaredScalarRegisterCount += count.toInt
+                case WideRegisterDecl(count) =>
+                  declaredWideRegisterCount += count.toInt
                 case _ =>
                   fail(lineNumber, s"unsupported register declaration: $statement")
               }
@@ -454,7 +496,8 @@ object PtxAssembler {
     require(!inBody, "unterminated .entry body")
 
     ParsedModule(
-      declaredRegisterCount = declaredRegisterCount,
+      declaredScalarRegisterCount = declaredScalarRegisterCount,
+      declaredWideRegisterCount = declaredWideRegisterCount,
       declaredPredicateCount = declaredPredicateCount,
       paramOffsets = params.toMap,
       sharedOffsets = sharedOffsets.toMap,
@@ -539,6 +582,9 @@ object PtxAssembler {
               case "mov.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 MovInstruction(destination, parseMovOperand(source))
+              case "mov.u64" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                MoveWideSpecialInstruction(destination, source)
               case "add.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.ADD, Some(Opcode.ADDI), destination, lhs, parseScalarOperand(rhs))
@@ -566,6 +612,9 @@ object PtxAssembler {
               case "st.global.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreInstruction("global", parseMemoryOperand(destination), source)
+              case "st.global.u64" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                StoreWideInstruction("global", parseMemoryOperand(destination), source)
               case "ld.shared.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 LoadInstruction("shared", destination, parseMemoryOperand(source))
@@ -583,20 +632,38 @@ object PtxAssembler {
     }
   }
 
-  private def allocateRegisters(declaredRegisterCount: Int, declaredPredicateCount: Int): RegisterLayout = {
+  private def allocateRegisters(declaredScalarRegisterCount: Int, declaredWideRegisterCount: Int, declaredPredicateCount: Int): RegisterLayout = {
     val usableRegisterCount = Isa.registerCount - 1
-    require(declaredRegisterCount >= 0, "declared PTX register count must be non-negative")
+    require(declaredScalarRegisterCount >= 0, "declared PTX scalar register count must be non-negative")
+    require(declaredWideRegisterCount >= 0, "declared PTX 64-bit register count must be non-negative")
     require(declaredPredicateCount >= 0, "declared PTX predicate count must be non-negative")
+    val requiredRegisters = declaredScalarRegisterCount + (declaredWideRegisterCount * 2) + declaredPredicateCount + 1
     require(
-      declaredRegisterCount + declaredPredicateCount + 1 <= usableRegisterCount,
-      s"PTX source declares $declaredRegisterCount registers and $declaredPredicateCount predicates, but only $usableRegisterCount hardware registers are available including one scratch register"
+      requiredRegisters <= usableRegisterCount,
+      s"PTX source declares $declaredScalarRegisterCount scalar registers, $declaredWideRegisterCount 64-bit registers, and $declaredPredicateCount predicates, but only $usableRegisterCount hardware registers are available including one scratch register"
     )
 
-    val userRegisters = (0 until declaredRegisterCount).map(index => s"%r$index" -> (index + 1)).toMap
+    var nextRegister = 1
+    val scalarRegisters =
+      (0 until declaredScalarRegisterCount).map { index =>
+        val allocated = nextRegister
+        nextRegister += 1
+        s"%r$index" -> allocated
+      }.toMap
+    val wideRegisters =
+      (0 until declaredWideRegisterCount).map { index =>
+        val low = nextRegister
+        nextRegister += 2
+        s"%rd$index" -> (low, low + 1)
+      }.toMap
     val predicateRegisters =
-      (0 until declaredPredicateCount).map(index => s"%p$index" -> (declaredRegisterCount + index + 1)).toMap
-    val scratchRegister = declaredRegisterCount + declaredPredicateCount + 1
-    RegisterLayout(userRegisters, predicateRegisters, scratchRegister)
+      (0 until declaredPredicateCount).map { index =>
+        val allocated = nextRegister
+        nextRegister += 1
+        s"%p$index" -> allocated
+      }.toMap
+    val scratchRegister = nextRegister
+    RegisterLayout(scalarRegisters, wideRegisters, predicateRegisters, scratchRegister)
   }
 
   private def assignLabelAddresses(body: Seq[BodyItem], layout: RegisterLayout, context: ModuleContext): Map[String, Int] = {
