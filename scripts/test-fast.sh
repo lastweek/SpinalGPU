@@ -9,4 +9,5 @@ SPEC="${1:-spinalgpu.GpuTopSimSpec}"
 require_cmd sbt
 require_cmd verilator
 
+"${SCRIPT_DIR}/build-kernels.sh"
 run_sbt "testOnly ${SPEC}"

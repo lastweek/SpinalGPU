@@ -1,0 +1,6 @@
+; Store to a misaligned global address to provoke a load/store fault.
+s2r r1, %argbase
+ldg r2, [r1 + 0]
+movi r3, 1
+stg [r2 + 2], r3
+exit

@@ -8,6 +8,7 @@ import spinal.lib.bus.amba4.axilite._
 case class GpuTopIo(config: SmConfig) extends Bundle {
   val memory = master(Axi4(config.axiConfig))
   val control = slave(AxiLite4(config.axiLiteConfig))
+  val debugStatus = out(LaunchStatus(config))
 }
 
 class GpuTop(val config: SmConfig = SmConfig.default) extends Component {
@@ -31,6 +32,7 @@ class GpuTop(val config: SmConfig = SmConfig.default) extends Component {
     streamingMultiprocessor.io.control.start := controlBlock.io.start
     streamingMultiprocessor.io.control.clearDone := controlBlock.io.clearDone
     controlBlock.io.status := streamingMultiprocessor.io.control.status
+    io.debugStatus := streamingMultiprocessor.io.control.status
     io.memory <> streamingMultiprocessor.io.memory
   }
 }

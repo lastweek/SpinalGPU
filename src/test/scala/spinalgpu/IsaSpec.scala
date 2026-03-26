@@ -45,36 +45,14 @@ class IsaSpec extends AnyFunSuite with Matchers {
     decodedSys.specialRegister shouldBe SpecialRegisterKind.TidX
   }
 
-  test("assembler and disassembler round-trip representative instructions") {
-    val cases = Seq(
-      "add r3, r1, r2",
-      "addi r4, r5, -7",
-      "ldg r6, [r7 + 12]",
-      "stg [r7 + 4], r6",
-      "brnz r8, -4",
-      "s2r r9, %tid.x",
-      "exit"
-    )
-
-    cases.foreach { source =>
-      val assembled = Isa.assemble(source).words.head
-      val disassembled = Isa.disassemble(assembled)
-      Isa.assemble(disassembled).words.head shouldBe assembled
-    }
-  }
-
-  test("assembler resolves labels relative to pc plus four") {
-    val program = Isa.assemble(
-      """movi r1, 2
-        |loop:
-        |addi r1, r1, -1
-        |brnz r1, loop
-        |exit
-        |""".stripMargin
-    )
-
-    program.labels("loop") shouldBe 4
-    Isa.decodeWord(program.words(2)).immediate shouldBe -8
+  test("disassembler formats representative instructions") {
+    Isa.disassemble(Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)) shouldBe "add r3, r1, r2"
+    Isa.disassemble(Isa.encodeRri(Opcode.ADDI, rd = 4, rs0 = 5, immediate = -7)) shouldBe "addi r4, r5, -7"
+    Isa.disassemble(Isa.encodeMem(Opcode.LDG, reg = 6, base = 7, offset = 12)) shouldBe "ldg r6, [r7 + 12]"
+    Isa.disassemble(Isa.encodeMem(Opcode.STG, reg = 6, base = 7, offset = 4)) shouldBe "stg [r7 + 4], r6"
+    Isa.disassemble(Isa.encodeBr(Opcode.BRNZ, rs0 = 8, offset = -4)) shouldBe "brnz r8, -4"
+    Isa.disassemble(Isa.encodeSys(Opcode.S2R, rd = 9, specialRegister = SpecialRegisterKind.TidX)) shouldBe "s2r r9, %tid.x"
+    Isa.disassemble(Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)) shouldBe "exit"
   }
 
   test("decoder rejects unknown opcodes") {

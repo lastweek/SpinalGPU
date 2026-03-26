@@ -1,10 +1,12 @@
 package spinalgpu
 
+import java.nio.file.Path
 import scala.math.BigInt
 import spinal.core.ClockDomain
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
 import spinal.lib.bus.amba4.axilite.sim._
+import spinalgpu.toolchain.KernelBinaryIO
 
 object ExecutionTestUtils {
   final case class HostLaunch(
@@ -25,12 +27,14 @@ object ExecutionTestUtils {
     memory.memory.readBigInt(address, byteCount)
   }
 
-  def loadProgram(memory: AxiMemorySim, baseAddress: Long, source: String, byteCount: Int): AssembledProgram = {
-    val program = Isa.assemble(source)
-    program.words.zipWithIndex.foreach { case (word, index) =>
+  def loadBinary(memory: AxiMemorySim, baseAddress: Long, words: Seq[Int], byteCount: Int): Unit = {
+    words.zipWithIndex.foreach { case (word, index) =>
       writeWord(memory, baseAddress + (index.toLong * byteCount), u32(word), byteCount)
     }
-    program
+  }
+
+  def loadBinaryFile(memory: AxiMemorySim, baseAddress: Long, path: Path, byteCount: Int): Unit = {
+    loadBinary(memory, baseAddress, KernelBinaryIO.readWords(path), byteCount)
   }
 
   def writeArgBuffer(memory: AxiMemorySim, argBase: Long, values: Seq[Long], byteCount: Int): Unit = {
@@ -45,29 +49,68 @@ object ExecutionTestUtils {
     }
   }
 
-  def launchKernel(driver: AxiLite4Driver, launch: HostLaunch): Unit = {
-    driver.write(BigInt(ControlRegisters.EntryPc), BigInt(launch.entryPc))
-    driver.write(BigInt(ControlRegisters.GridDimX), BigInt(launch.gridDimX))
-    driver.write(BigInt(ControlRegisters.BlockDimX), BigInt(launch.blockDimX))
-    driver.write(BigInt(ControlRegisters.ArgBase), BigInt(launch.argBase))
-    driver.write(BigInt(ControlRegisters.SharedBytes), BigInt(launch.sharedBytes))
-    driver.write(BigInt(ControlRegisters.Control), BigInt(1))
+  private def withAxiLiteTimeout[T](clockDomain: ClockDomain, timeoutCycles: Int, label: String)(body: => T): T = {
+    var result: Option[T] = None
+    var failure: Option[Throwable] = None
+    var completed = false
+
+    fork {
+      try {
+        result = Some(body)
+      } catch {
+        case error: Throwable =>
+          failure = Some(error)
+      } finally {
+        completed = true
+      }
+    }
+
+    var cycles = 0
+    while (!completed && cycles < timeoutCycles) {
+      clockDomain.waitSampling()
+      cycles += 1
+    }
+
+    assert(completed, s"$label timed out after $timeoutCycles cycles")
+    failure.foreach(throw _)
+    result.get
   }
 
-  def clearDone(driver: AxiLite4Driver): Unit = {
-    driver.write(BigInt(ControlRegisters.Control), BigInt(2))
+  def writeRegister(driver: AxiLite4Driver, clockDomain: ClockDomain, address: Int, data: BigInt, timeoutCycles: Int = 256): Unit = {
+    withAxiLiteTimeout(clockDomain, timeoutCycles, f"AXI-Lite write 0x$address%X") {
+      driver.write(BigInt(address), data)
+    }
   }
 
-  def readStatus(driver: AxiLite4Driver): BigInt = {
-    driver.read(BigInt(ControlRegisters.Status))
+  def readRegister(driver: AxiLite4Driver, clockDomain: ClockDomain, address: Int, timeoutCycles: Int = 256): BigInt = {
+    withAxiLiteTimeout(clockDomain, timeoutCycles, f"AXI-Lite read 0x$address%X") {
+      driver.read(BigInt(address))
+    }
   }
 
-  def readFaultCode(driver: AxiLite4Driver): BigInt = {
-    driver.read(BigInt(ControlRegisters.FaultCode))
+  def launchKernel(driver: AxiLite4Driver, clockDomain: ClockDomain, launch: HostLaunch): Unit = {
+    writeRegister(driver, clockDomain, ControlRegisters.EntryPc, BigInt(launch.entryPc))
+    writeRegister(driver, clockDomain, ControlRegisters.GridDimX, BigInt(launch.gridDimX))
+    writeRegister(driver, clockDomain, ControlRegisters.BlockDimX, BigInt(launch.blockDimX))
+    writeRegister(driver, clockDomain, ControlRegisters.ArgBase, BigInt(launch.argBase))
+    writeRegister(driver, clockDomain, ControlRegisters.SharedBytes, BigInt(launch.sharedBytes))
+    writeRegister(driver, clockDomain, ControlRegisters.Control, BigInt(1))
   }
 
-  def readFaultPc(driver: AxiLite4Driver): BigInt = {
-    driver.read(BigInt(ControlRegisters.FaultPc))
+  def clearDone(driver: AxiLite4Driver, clockDomain: ClockDomain): Unit = {
+    writeRegister(driver, clockDomain, ControlRegisters.Control, BigInt(2))
+  }
+
+  def readStatus(driver: AxiLite4Driver, clockDomain: ClockDomain): BigInt = {
+    readRegister(driver, clockDomain, ControlRegisters.Status)
+  }
+
+  def readFaultCode(driver: AxiLite4Driver, clockDomain: ClockDomain): BigInt = {
+    readRegister(driver, clockDomain, ControlRegisters.FaultCode)
+  }
+
+  def readFaultPc(driver: AxiLite4Driver, clockDomain: ClockDomain): BigInt = {
+    readRegister(driver, clockDomain, ControlRegisters.FaultPc)
   }
 
   def waitForDone(
@@ -77,12 +120,12 @@ object ExecutionTestUtils {
       pollIntervalCycles: Int = 8
   ): BigInt = {
     clockDomain.waitSampling()
-    var status = readStatus(driver)
+    var status = readStatus(driver, clockDomain)
     var cycles = 0
     while (((status >> 1) & 1) == 0 && cycles < timeoutCycles) {
       clockDomain.waitSampling(pollIntervalCycles)
       cycles += pollIntervalCycles
-      status = readStatus(driver)
+      status = readStatus(driver, clockDomain)
     }
 
     assert(

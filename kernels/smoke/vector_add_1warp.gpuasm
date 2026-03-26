@@ -1,0 +1,16 @@
+; Compute C[i] = A[i] + B[i] for one warp.
+s2r r1, %argbase
+ldg r2, [r1 + 0]
+ldg r3, [r1 + 4]
+ldg r4, [r1 + 8]
+s2r r5, %tid.x
+movi r6, 2
+shl r7, r5, r6
+add r8, r2, r7
+add r9, r3, r7
+add r10, r4, r7
+ldg r11, [r8 + 0]
+ldg r12, [r9 + 0]
+add r13, r11, r12
+stg [r10 + 0], r13
+exit

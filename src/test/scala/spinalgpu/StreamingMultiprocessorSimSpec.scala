@@ -83,38 +83,27 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
     }
   }
 
-  test("two-warp thread_id_store kernel completes and writes expected results") {
+  test("two-warp thread_id_store kernel from the corpus completes and writes expected results") {
+    val kernel = KernelManifest.threadIdStore
+
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
       dut.io.control.start #= false
       dut.io.control.clearDone #= false
-      dut.io.control.launch.entryPc #= 0x100
-      dut.io.control.launch.gridDimX #= 1
-      dut.io.control.launch.blockDimX #= 40
-      dut.io.control.launch.argBase #= 0x200
-      dut.io.control.launch.sharedBytes #= 0
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
       dut.clockDomain.waitSampling()
       dut.clockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
       memory.start()
 
-      ExecutionTestUtils.loadProgram(
-        memory,
-        0x100,
-        """s2r r1, %argbase
-          |ldg r2, [r1 + 0]
-          |s2r r3, %tid.x
-          |movi r4, 2
-          |shl r5, r3, r4
-          |add r6, r2, r5
-          |stg [r6 + 0], r3
-          |exit
-          |""".stripMargin,
-        config.byteCount
-      )
-      ExecutionTestUtils.writeArgBuffer(memory, 0x200, Seq(0x400), config.byteCount)
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
 
       pulseStart(dut)
 
@@ -142,8 +131,193 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
       )
       dut.io.control.status.fault.toBoolean shouldBe false
 
-      (0 until 40).foreach { index =>
-        memory.memory.readBigInt(0x400L + index * 4L, config.byteCount) shouldBe BigInt(index)
+      kernel.expectation match {
+        case success: KernelManifest.CompletionExpectation.Success =>
+          success.assertResults(memory, config.byteCount)
+        case _ =>
+          fail("thread_id_store should be a success case")
+      }
+
+      memory.stop()
+    }
+  }
+
+  test("add_store_exit kernel from the corpus completes and writes the arithmetic result") {
+    val kernel = KernelManifest.addStoreExit
+
+    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.clockDomain.assertReset()
+      dut.io.control.start #= false
+      dut.io.control.clearDone #= false
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      memory.start()
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
+
+      pulseStart(dut)
+
+      var cycles = 0
+      while (!dut.io.control.status.done.toBoolean && cycles < 5000) {
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+      assert(
+        dut.io.control.status.done.toBoolean,
+        s"add_store_exit did not complete after $cycles cycles; " +
+          s"busy=${dut.io.control.status.busy.toBoolean} fault=${dut.io.control.status.fault.toBoolean} " +
+          s"faultCode=${dut.io.control.status.faultCode.toBigInt} " +
+          s"engineState=${dut.io.debug.engineState.toBigInt} " +
+          s"selectedWarp=${dut.io.debug.selectedWarpId.toBigInt} selectedPc=0x${dut.io.debug.selectedPc.toBigInt.toString(16)}"
+      )
+      dut.io.control.status.fault.toBoolean shouldBe false
+
+      kernel.expectation match {
+        case success: KernelManifest.CompletionExpectation.Success =>
+          success.assertResults(memory, config.byteCount)
+        case _ =>
+          fail("add_store_exit should be a success case")
+      }
+
+      memory.stop()
+    }
+  }
+
+  test("uniform_loop kernel from the corpus completes and writes the terminal value") {
+    val kernel = KernelManifest.uniformLoop
+
+    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.clockDomain.assertReset()
+      dut.io.control.start #= false
+      dut.io.control.clearDone #= false
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      memory.start()
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
+
+      pulseStart(dut)
+
+      var cycles = 0
+      while (!dut.io.control.status.done.toBoolean && cycles < 5000) {
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+      assert(
+        dut.io.control.status.done.toBoolean,
+        s"uniform_loop did not complete after $cycles cycles; " +
+          s"busy=${dut.io.control.status.busy.toBoolean} fault=${dut.io.control.status.fault.toBoolean} " +
+          s"faultCode=${dut.io.control.status.faultCode.toBigInt} " +
+          s"engineState=${dut.io.debug.engineState.toBigInt} " +
+          s"selectedWarp=${dut.io.debug.selectedWarpId.toBigInt} selectedPc=0x${dut.io.debug.selectedPc.toBigInt.toString(16)}"
+      )
+      dut.io.control.status.fault.toBoolean shouldBe false
+
+      kernel.expectation match {
+        case success: KernelManifest.CompletionExpectation.Success =>
+          success.assertResults(memory, config.byteCount)
+        case _ =>
+          fail("uniform_loop should be a success case")
+      }
+
+      memory.stop()
+    }
+  }
+
+  test("shared_roundtrip kernel from the corpus completes and writes shared-memory results") {
+    val kernel = KernelManifest.sharedRoundtrip
+
+    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.clockDomain.assertReset()
+      dut.io.control.start #= false
+      dut.io.control.clearDone #= false
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      memory.start()
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
+
+      pulseStart(dut)
+
+      var cycles = 0
+      while (!dut.io.control.status.done.toBoolean && cycles < 5000) {
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+      assert(dut.io.control.status.done.toBoolean, s"shared_roundtrip did not complete after $cycles cycles")
+      dut.io.control.status.fault.toBoolean shouldBe false
+
+      kernel.expectation match {
+        case success: KernelManifest.CompletionExpectation.Success =>
+          success.assertResults(memory, config.byteCount)
+        case _ =>
+          fail("shared_roundtrip should be a success case")
+      }
+
+      memory.stop()
+    }
+  }
+
+  test("vector_add_1warp kernel from the corpus completes and writes vector sums") {
+    val kernel = KernelManifest.vectorAdd1Warp
+
+    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.clockDomain.assertReset()
+      dut.io.control.start #= false
+      dut.io.control.clearDone #= false
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      memory.start()
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
+
+      pulseStart(dut)
+
+      var cycles = 0
+      while (!dut.io.control.status.done.toBoolean && cycles < 10000) {
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+      assert(dut.io.control.status.done.toBoolean, s"vector_add_1warp did not complete after $cycles cycles")
+      dut.io.control.status.fault.toBoolean shouldBe false
+
+      kernel.expectation match {
+        case success: KernelManifest.CompletionExpectation.Success =>
+          success.assertResults(memory, config.byteCount)
+        case _ =>
+          fail("vector_add_1warp should be a success case")
       }
 
       memory.stop()
@@ -179,33 +353,57 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
     }
   }
 
-  test("non-uniform branch traps and latches fault status") {
+  test("misaligned_store kernel from the corpus traps and latches fault status") {
+    val kernel = KernelManifest.misalignedStore
+
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
       dut.io.control.start #= false
       dut.io.control.clearDone #= false
-      dut.io.control.launch.entryPc #= 0x100
-      dut.io.control.launch.gridDimX #= 1
-      dut.io.control.launch.blockDimX #= 8
-      dut.io.control.launch.argBase #= 0
-      dut.io.control.launch.sharedBytes #= 0
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
       dut.clockDomain.waitSampling()
       dut.clockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
       memory.start()
-      ExecutionTestUtils.loadProgram(
-        memory,
-        0x100,
-        """s2r r1, %tid.x
-          |brnz r1, taken
-          |exit
-          |taken:
-          |exit
-          |""".stripMargin,
-        config.byteCount
-      )
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
+
+      pulseStart(dut)
+
+      dut.clockDomain.waitSamplingWhere(dut.io.control.status.done.toBoolean)
+      dut.io.control.status.fault.toBoolean shouldBe true
+      dut.io.control.status.faultCode.toBigInt shouldBe FaultCode.MisalignedLoadStore
+
+      memory.stop()
+    }
+  }
+
+  test("non-uniform branch kernel from the corpus traps and latches fault status") {
+    val kernel = KernelManifest.nonUniformBranch
+
+    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.clockDomain.assertReset()
+      dut.io.control.start #= false
+      dut.io.control.clearDone #= false
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      memory.start()
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
 
       pulseStart(dut)
 
@@ -213,7 +411,44 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
       dut.io.debug.trap.payload.faultCode.toBigInt shouldBe FaultCode.NonUniformBranch
       dut.clockDomain.waitSamplingWhere(dut.io.control.status.done.toBoolean)
       dut.io.control.status.fault.toBoolean shouldBe true
-      dut.io.control.status.faultCode.toBigInt shouldBe FaultCode.NonUniformBranch
+
+      kernel.expectation match {
+        case fault: KernelManifest.CompletionExpectation.Fault =>
+          dut.io.control.status.faultCode.toBigInt shouldBe fault.code
+        case _ =>
+          fail("non_uniform_branch should be a fault case")
+      }
+
+      memory.stop()
+    }
+  }
+
+  test("trap kernel from the corpus traps and latches fault status") {
+    val kernel = KernelManifest.trap
+
+    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+      dut.clockDomain.forkStimulus(period = 10)
+      dut.clockDomain.assertReset()
+      dut.io.control.start #= false
+      dut.io.control.clearDone #= false
+      dut.io.control.launch.entryPc #= kernel.entryPc
+      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
+      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
+      dut.io.control.launch.argBase #= kernel.launch.argBase
+      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.clockDomain.waitSampling()
+      dut.clockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      memory.start()
+      ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, config.byteCount)
+      kernel.preload(memory, config.byteCount)
+
+      pulseStart(dut)
+
+      dut.clockDomain.waitSamplingWhere(dut.io.control.status.done.toBoolean)
+      dut.io.control.status.fault.toBoolean shouldBe true
+      dut.io.control.status.faultCode.toBigInt shouldBe FaultCode.Trap
 
       memory.stop()
     }

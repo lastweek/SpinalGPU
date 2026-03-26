@@ -38,6 +38,7 @@ This repository uses a custom fixed-width 32-bit ISA inspired by PTX concepts an
 
 - Instruction width: `32` bits
 - Opcode field: bits `[31:24]`
+- Loadable artifact: raw `.bin`, little-endian, flat 32-bit instruction words
 
 ### Formats
 
@@ -107,6 +108,11 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` are reserved for future SFU and Tens
   - `0x1C FAULT_PC`
   - `0x20 FAULT_CODE`
 - `ENTRY_PC` points into unified external memory.
+- The host loads a prebuilt raw kernel binary into external memory before launch.
+- The binary is headerless in v1:
+  - no embedded entry point
+  - no embedded load address
+  - no embedded launch metadata
 - `ARG_BASE` points at a 32-bit word argument buffer in global memory.
 - Results are returned by program stores to global memory.
 - Completion is reported through `STATUS.done`.

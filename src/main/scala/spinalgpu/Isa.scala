@@ -1,7 +1,5 @@
 package spinalgpu
 
-import scala.collection.mutable
-
 object Opcode {
   val NOP = 0x00
   val MOV = 0x01
@@ -138,8 +136,6 @@ final case class DecodedWord(
     specialRegister: Int
 )
 
-final case class AssembledProgram(words: Seq[Int], labels: Map[String, Int])
-
 object Isa {
   val instructionBytes = 4
   val registerCount = 32
@@ -237,90 +233,4 @@ object Isa {
     }
   }
 
-  def assemble(source: String): AssembledProgram = {
-    val lines = source.linesIterator.toSeq.map(_.takeWhile(_ != ';').trim).filter(_.nonEmpty)
-    val labels = mutable.LinkedHashMap.empty[String, Int]
-    val instructions = mutable.ArrayBuffer.empty[(Int, String)]
-    var pc = 0
-
-    lines.foreach { line =>
-      if (line.endsWith(":")) {
-        labels += line.dropRight(1) -> pc
-      } else {
-        instructions += pc -> line
-        pc += instructionBytes
-      }
-    }
-
-    val words = instructions.map { case (address, line) =>
-      assembleLine(address, line, labels.toMap)
-    }.toSeq
-
-    AssembledProgram(words, labels.toMap)
-  }
-
-  private def assembleLine(address: Int, line: String, labels: Map[String, Int]): Int = {
-    val lower = line.toLowerCase
-
-    def parseRegister(token: String): Int = {
-      require(token.startsWith("r"), s"expected register, got: $token")
-      token.drop(1).toInt
-    }
-
-    def parseImmediate(token: String): Int = {
-      val trimmed = token.trim
-      labels.get(trimmed) match {
-        case Some(labelAddress) => labelAddress - (address + instructionBytes)
-        case None if trimmed.startsWith("0x") || trimmed.startsWith("-0x") =>
-          Integer.decode(trimmed)
-        case None => trimmed.toInt
-      }
-    }
-
-    lower match {
-      case "nop" => encodeBr(Opcode.NOP, 0, 0)
-      case "exit" => encodeBr(Opcode.EXIT, 0, 0)
-      case "trap" => encodeBr(Opcode.TRAP, 0, 0)
-      case _ =>
-        lower.split("\\s+", 2).toList match {
-          case mnemonic :: rest :: Nil =>
-            mnemonic match {
-              case "mov" =>
-                val Seq(rd, rs0) = rest.split(",").map(_.trim).toSeq
-                encodeRrr(Opcode.MOV, parseRegister(rd), parseRegister(rs0), 0)
-              case "movi" =>
-                val Seq(rd, imm) = rest.split(",").map(_.trim).toSeq
-                encodeRri(Opcode.MOVI, parseRegister(rd), 0, parseImmediate(imm))
-              case "s2r" =>
-                val Seq(rd, special) = rest.split(",").map(_.trim).toSeq
-                encodeSys(Opcode.S2R, parseRegister(rd), SpecialRegisterKind.byName(special))
-              case "add" | "sub" | "mullo" | "and" | "or" | "xor" | "shl" | "shr" | "seteq" | "setlt" =>
-                val Seq(rd, rs0, rs1) = rest.split(",").map(_.trim).toSeq
-                encodeRrr(Opcode.byName(mnemonic), parseRegister(rd), parseRegister(rs0), parseRegister(rs1))
-              case "addi" =>
-                val Seq(rd, rs0, imm) = rest.split(",").map(_.trim).toSeq
-                encodeRri(Opcode.ADDI, parseRegister(rd), parseRegister(rs0), parseImmediate(imm))
-              case "ldg" | "lds" =>
-                val Seq(rd, mem) = rest.split(",").map(_.trim).toSeq
-                val memMatch = "\\[(r\\d+)\\s*\\+\\s*([^\\]]+)\\]".r
-                val memMatch(base, off) = mem
-                encodeMem(Opcode.byName(mnemonic), parseRegister(rd), parseRegister(base), parseImmediate(off))
-              case "stg" | "sts" =>
-                val Seq(mem, rs) = rest.split(",").map(_.trim).toSeq
-                val memMatch = "\\[(r\\d+)\\s*\\+\\s*([^\\]]+)\\]".r
-                val memMatch(base, off) = mem
-                encodeMem(Opcode.byName(mnemonic), parseRegister(rs), parseRegister(base), parseImmediate(off))
-              case "bra" =>
-                encodeBr(Opcode.BRA, 0, parseImmediate(rest.trim))
-              case "brz" | "brnz" =>
-                val Seq(rs0, target) = rest.split(",").map(_.trim).toSeq
-                encodeBr(Opcode.byName(mnemonic), parseRegister(rs0), parseImmediate(target))
-              case _ =>
-                throw new IllegalArgumentException(s"unsupported mnemonic: $mnemonic")
-            }
-          case _ =>
-            throw new IllegalArgumentException(s"unable to parse instruction: $line")
-        }
-    }
-  }
 }

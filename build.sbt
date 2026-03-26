@@ -10,6 +10,7 @@ val spinalLib = "com.github.spinalhdl" %% "spinalhdl-lib" % spinalVersion
 val spinalIdslPlugin =
   compilerPlugin("com.github.spinalhdl" %% "spinalhdl-idsl-plugin" % spinalVersion)
 val scalaTest = "org.scalatest" %% "scalatest" % scalaTestVersion % Test
+val buildKernelCorpus = taskKey[Unit]("Build the standalone kernel corpus into generated/kernels")
 
 lazy val root = (project in file("."))
   .settings(
@@ -22,7 +23,11 @@ lazy val root = (project in file("."))
       scalaTest
     ),
     Compile / run / mainClass := Some("spinalgpu.GenerateGpuTop"),
-    Test / parallelExecution := false
+    Test / parallelExecution := false,
+    buildKernelCorpus := Def.taskDyn {
+      (Compile / runMain).toTask(" spinalgpu.toolchain.BuildKernelCorpus")
+    }.value,
+    Test / test := ((Test / test) dependsOn buildKernelCorpus).value
   )
 
 fork := true

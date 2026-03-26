@@ -29,7 +29,7 @@ This repository now exposes a single-SM architecture with a real launch, fetch, 
 ## Program Loading Model
 
 - Kernel code, argument buffers, and global data all live in unified external memory.
-- The host writes the program image and data buffers into external memory before launch.
+- The host writes a prebuilt raw kernel binary and any data buffers into external memory before launch.
 - AXI-Lite MMIO provides the launch metadata:
   - `ENTRY_PC`
   - `GRID_DIM_X`
@@ -37,7 +37,7 @@ This repository now exposes a single-SM architecture with a real launch, fetch, 
   - `ARG_BASE`
   - `SHARED_BYTES`
 - The `LaunchController` turns one block launch into resident warp contexts.
-- The warp table stores runtime state only. It does not store program instructions or a decoded kernel image.
+- The warp table stores runtime state only. It does not store source text, program instructions, or a decoded kernel image.
 - The scheduler selects a runnable warp, the fetch unit reads the instruction at that warp’s `pc`, and the decode/issue path sends the work to the correct unit.
 
 ## Module Responsibilities
