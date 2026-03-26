@@ -5,24 +5,24 @@ import java.nio.file.Path
 import scala.collection.JavaConverters._
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import spinalgpu.toolchain.KernelCatalog
-import spinalgpu.toolchain.KernelLevel
+import spinalgpu.toolchain.KernelCorpus
+import spinalgpu.toolchain.KernelCorpus.{KernelExpectation, KernelLevel}
 
-class KernelManifestSpec extends AnyFunSuite with Matchers {
+class KernelCorpusSpec extends AnyFunSuite with Matchers {
   private def trimmedNonEmptyLines(path: Path): Seq[String] =
     Files.readAllLines(path).asScala.map(_.trim).filter(_.nonEmpty).toSeq
 
-  test("kernel manifest references every .ptx file exactly once and generated binaries exist") {
+  test("kernel corpus references every .ptx file exactly once and generated binaries exist") {
     ExecutionTestUtils.ensureKernelCorpusBuilt()
 
-    val manifestPaths = KernelManifest.allCases.map(_.sourcePath.normalize()).toSet
-    manifestPaths.foreach(path => Files.exists(path) shouldBe true)
-    KernelManifest.allCases.foreach { kernel =>
+    val corpusPaths = KernelCorpus.all.map(_.sourcePath.normalize()).toSet
+    corpusPaths.foreach(path => Files.exists(path) shouldBe true)
+    KernelCorpus.all.foreach { kernel =>
       Files.exists(kernel.binaryPath) shouldBe true
-      kernel.binaryPath.startsWith(KernelCatalog.outputRoot) shouldBe true
+      kernel.binaryPath.startsWith(KernelCorpus.outputRoot) shouldBe true
     }
 
-    val stream = Files.walk(KernelCatalog.sourceRoot)
+    val stream = Files.walk(KernelCorpus.sourceRoot)
     val discoveredPaths =
       try {
         stream.iterator().asScala
@@ -33,31 +33,32 @@ class KernelManifestSpec extends AnyFunSuite with Matchers {
         stream.close()
       }
 
-    manifestPaths shouldBe discoveredPaths
+    corpusPaths shouldBe discoveredPaths
   }
 
-  test("kernel catalog metadata is complete and matches manifest expectations") {
-    KernelManifest.allCases.foreach { kernel =>
-      kernel.description.trim should not be empty
+  test("kernel corpus metadata is complete and expectation types match teaching levels") {
+    KernelCorpus.all.foreach { kernel =>
+      kernel.purpose.trim should not be empty
       kernel.secondaryFeatures.distinct shouldBe kernel.secondaryFeatures
       kernel.secondaryFeatures should not contain kernel.primaryFeature
+      kernel.harnessTargets should not be empty
 
       kernel.expectation match {
-        case _: KernelManifest.CompletionExpectation.Fault =>
+        case _: KernelExpectation.Fault =>
           kernel.teachingLevel shouldBe KernelLevel.Fault
-        case _: KernelManifest.CompletionExpectation.Success =>
+        case _: KernelExpectation.Success =>
           kernel.teachingLevel should not equal KernelLevel.Fault
       }
     }
   }
 
-  test("PTX kernel corpus follows the teaching template") {
-    KernelManifest.allCases.foreach { kernel =>
+  test("kernel corpus PTX headers match declarative metadata and follow the teaching template") {
+    KernelCorpus.all.foreach { kernel =>
       val lines = trimmedNonEmptyLines(kernel.sourcePath)
 
-      lines.head should startWith("// Purpose:")
-      lines(1) should startWith("// Primary feature:")
-      lines(2) should startWith("// Expected outcome:")
+      lines.head shouldBe s"// Purpose: ${kernel.purpose}"
+      lines(1) shouldBe s"// Primary feature: ${kernel.primaryFeature.id}"
+      lines(2) shouldBe s"// Expected outcome: ${kernel.expectedOutcomeId}"
 
       val versionIndex = lines.indexOf(".version 8.0")
       val targetIndex = lines.indexOf(".target spinalgpu")
@@ -92,13 +93,18 @@ class KernelManifestSpec extends AnyFunSuite with Matchers {
       }
 
       kernel.expectation match {
-        case _: KernelManifest.CompletionExpectation.Success =>
+        case _: KernelExpectation.Success =>
           exitIndex should be > coreIndex
           faultIndex shouldBe -1
-        case _: KernelManifest.CompletionExpectation.Fault =>
+        case _: KernelExpectation.Fault =>
           faultIndex should be > coreIndex
           exitIndex shouldBe -1
       }
     }
+  }
+
+  test("kernel corpus exposes at least one case for each enabled harness") {
+    KernelCorpus.streamingMultiprocessorCases should not be empty
+    KernelCorpus.gpuTopCases should not be empty
   }
 }

@@ -9,18 +9,11 @@ import spinal.lib.bus.amba4.axi.sim._
 import spinal.lib.bus.amba4.axilite.sim._
 import spinalgpu.toolchain.BuildKernelCorpus
 import spinalgpu.toolchain.KernelBinaryIO
-import spinalgpu.toolchain.KernelCatalog
+import spinalgpu.toolchain.KernelCorpus
 
 object ExecutionTestUtils {
-  final case class HostLaunch(
-      entryPc: Long,
-      blockDimX: Int,
-      argBase: Long = 0L,
-      gridDimX: Long = 1L,
-      sharedBytes: Int = 0
-  )
-
   def u32(value: Int): BigInt = BigInt(value.toLong & 0xFFFFFFFFL)
+  def u32(value: Long): BigInt = BigInt(value & 0xFFFFFFFFL)
 
   def writeWord(memory: AxiMemorySim, address: Long, value: BigInt, byteCount: Int): Unit = {
     memory.memory.writeBigInt(address, value, byteCount)
@@ -32,8 +25,9 @@ object ExecutionTestUtils {
 
   @volatile private var kernelCorpusReady: Boolean = false
 
+  /** Rebuilds generated kernel binaries on demand when a corpus-backed test references a missing `.bin`. */
   def ensureKernelCorpusBuilt(): Unit = synchronized {
-    val missingBinary = KernelCatalog.all.exists(artifact => !Files.exists(artifact.binaryPath))
+    val missingBinary = KernelCorpus.all.exists(kernel => !Files.exists(kernel.binaryPath))
     if (!kernelCorpusReady || missingBinary) {
       BuildKernelCorpus.buildAll()
       kernelCorpusReady = true
@@ -46,20 +40,23 @@ object ExecutionTestUtils {
     }
   }
 
+  /** Loads a generated machine-code file and auto-builds the corpus first if the requested `.bin` is missing. */
   def loadBinaryFile(memory: AxiMemorySim, baseAddress: Long, path: Path, byteCount: Int): Unit = {
-    if (path.normalize.startsWith(KernelCatalog.outputRoot) && !Files.exists(path)) {
+    if (path.normalize.startsWith(KernelCorpus.outputRoot) && !Files.exists(path)) {
       ensureKernelCorpusBuilt()
     }
     loadBinary(memory, baseAddress, KernelBinaryIO.readWords(path), byteCount)
   }
 
+  /** Writes the packed launch argument buffer consumed by `ld.param` lowering. */
   def writeArgBuffer(memory: AxiMemorySim, argBase: Long, values: Seq[Long], byteCount: Int): Unit = {
     values.zipWithIndex.foreach { case (value, index) =>
-      writeWord(memory, argBase + (index.toLong * byteCount), BigInt(value), byteCount)
+      writeWord(memory, argBase + (index.toLong * byteCount), u32(value), byteCount)
     }
   }
 
-  def writeDataWords(memory: AxiMemorySim, base: Long, values: Seq[Int], byteCount: Int): Unit = {
+  /** Writes raw 32-bit data words used by declarative corpus preload images. */
+  def writeDataWords(memory: AxiMemorySim, base: Long, values: Seq[Long], byteCount: Int): Unit = {
     values.zipWithIndex.foreach { case (value, index) =>
       writeWord(memory, base + (index.toLong * byteCount), u32(value), byteCount)
     }
@@ -104,7 +101,7 @@ object ExecutionTestUtils {
     }
   }
 
-  def launchKernel(driver: AxiLite4Driver, clockDomain: ClockDomain, launch: HostLaunch): Unit = {
+  def launchKernel(driver: AxiLite4Driver, clockDomain: ClockDomain, launch: KernelCorpus.HostLaunch): Unit = {
     writeRegister(driver, clockDomain, ControlRegisters.EntryPc, BigInt(launch.entryPc))
     writeRegister(driver, clockDomain, ControlRegisters.GridDimX, BigInt(launch.gridDimX))
     writeRegister(driver, clockDomain, ControlRegisters.BlockDimX, BigInt(launch.blockDimX))

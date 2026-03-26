@@ -29,9 +29,9 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `PA3` | `PtxAssemblerSpec`: lowers shared symbols to byte offsets in shared-memory instructions |
 | `PA4` | `PtxAssemblerSpec`: rejects unsupported PTX constructs |
 | `PA5` | `PtxAssemblerSpec`: kernel corpus builder emits raw little-endian binaries from PTX sources |
-| `KM1` | `KernelManifestSpec`: kernel manifest references every `.ptx` file exactly once and generated binaries exist |
-| `KM2` | `KernelManifestSpec`: kernel catalog metadata is complete and matches manifest expectations |
-| `KM3` | `KernelManifestSpec`: PTX kernel corpus follows the teaching template |
+| `KM1` | `KernelCorpusSpec`: kernel corpus references every `.ptx` file exactly once and generated binaries exist |
+| `KM2` | `KernelCorpusSpec`: kernel corpus metadata is complete and expectation types match teaching levels |
+| `KM3` | `KernelCorpusSpec`: PTX headers match declarative metadata and follow the teaching template |
 | `SM1` | `StreamingMultiprocessorSimSpec`: launch controller initializes warp contexts and schedules multiple warps |
 | `SM2` | `StreamingMultiprocessorSimSpec`: illegal opcode traps and latches fault status |
 | `SM3` | `StreamingMultiprocessorSimSpec`: `thread_id_store` completes and writes expected results |

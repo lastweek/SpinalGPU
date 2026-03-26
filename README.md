@@ -68,9 +68,9 @@ Use the small wrappers in `scripts/` for the common inner loop:
   - `kernels/global_memory/`
   - `kernels/shared_memory/`
   - `kernels/special_registers/`
-- [`src/main/scala/spinalgpu/toolchain/KernelCatalog.scala`](src/main/scala/spinalgpu/toolchain/KernelCatalog.scala) is the authoritative PTX-source and binary catalog.
-- [`src/test/scala/spinalgpu/KernelManifest.scala`](src/test/scala/spinalgpu/KernelManifest.scala) is the authoritative execution manifest for launch behavior, fault expectations, and runtime checks.
-- Success vs fault classification is stored in typed metadata plus manifest expectations, not in directory names.
+- [`src/main/scala/spinalgpu/toolchain/KernelCorpus.scala`](src/main/scala/spinalgpu/toolchain/KernelCorpus.scala) is the single source of truth for PTX source paths, generated binary paths, launch config, preload image, expected outcome, and harness coverage.
+- [`src/test/scala/spinalgpu/KernelCorpusTestUtils.scala`](src/test/scala/spinalgpu/KernelCorpusTestUtils.scala) is the shared runner used by the corpus-backed simulation specs.
+- Success vs fault classification is stored in typed declarative expectations, not in directory names.
 - The current harness split is:
   - `GpuTop`: AXI-Lite/AXI boundary smoke
   - `StreamingMultiprocessor`: full externalized kernel corpus
@@ -107,11 +107,12 @@ Each teaching kernel follows one strict file template:
 - `src/main/scala/spinalgpu/toolchain/PtxAssembler.scala`: PTX subset compiler that lowers PTX source into SpinalGPU machine words.
 - `src/main/scala/spinalgpu/toolchain/KernelBinaryIO.scala`: raw binary read/write helpers for generated machine code.
 - `src/main/scala/spinalgpu/toolchain/BuildKernelCorpus.scala`: batch compiler for the kernel corpus.
+- `src/main/scala/spinalgpu/toolchain/KernelCorpus.scala`: single declarative kernel corpus definition for source paths, launch config, preload image, and expectations.
 - `src/test/scala/spinalgpu/GpuTopSimSpec.scala`: top-level `SpinalSim` smoke test with AXI memory and AXI-Lite control.
 - `src/test/scala/spinalgpu/ExecutionFrontendSimSpec.scala`: experimental top-level `GpuTop` kernel-launch smoke, currently ignored in the default regression set.
-- `src/test/scala/spinalgpu/StreamingMultiprocessorSimSpec.scala`: full manifest-backed kernel corpus plus low-level launch/fetch frontend tests.
-- `src/test/scala/spinalgpu/KernelManifest.scala`: kernel corpus manifest with launch params, preload hooks, and expected outcomes.
-- `src/test/scala/spinalgpu/KernelManifestSpec.scala`: integrity test that keeps `kernels/` and the manifest in sync.
+- `src/test/scala/spinalgpu/StreamingMultiprocessorSimSpec.scala`: generated corpus-backed SM execution tests plus low-level launch/fetch frontend checks.
+- `src/test/scala/spinalgpu/KernelCorpusTestUtils.scala`: shared preload, launch, and assertion helpers for corpus-backed simulation specs.
+- `src/test/scala/spinalgpu/KernelCorpusSpec.scala`: integrity test that keeps `kernels/` and the declarative corpus in sync.
 - `src/test/scala/spinalgpu/IsaSpec.scala`: machine-encoding encoder, decoder, and disassembler tests.
 - `src/test/scala/spinalgpu/PtxAssemblerSpec.scala`: PTX subset compiler and binary-emission tests.
 - `src/test/scala/spinalgpu/ArchitectureSkeletonSpec.scala`: elaboration sweep and doc/diagram checks.
