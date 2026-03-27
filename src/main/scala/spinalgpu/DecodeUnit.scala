@@ -13,6 +13,7 @@ class DecodeUnit(config: SmConfig) extends Component {
   private val reg = io.instruction(23 downto 19).asUInt
   private val rs0 = io.instruction(18 downto 14).asUInt
   private val rs1 = io.instruction(13 downto 9).asUInt
+  private val rs2 = io.instruction(8 downto 4).asUInt
   private val imm = io.instruction(13 downto 0).asSInt.resize(config.dataWidth)
 
   io.decoded.valid := True
@@ -22,12 +23,14 @@ class DecodeUnit(config: SmConfig) extends Component {
   io.decoded.rd := reg
   io.decoded.rs0 := rs0
   io.decoded.rs1 := rs1
+  io.decoded.rs2 := rs2
   io.decoded.immediate := imm
   io.decoded.specialRegister := rs0.resized
   io.decoded.addressSpace := AddressSpaceKind.GLOBAL
   io.decoded.writesRd := False
   io.decoded.usesRs0 := False
   io.decoded.usesRs1 := False
+  io.decoded.usesRs2 := False
   io.decoded.isStore := False
   io.decoded.isLoad := False
   io.decoded.isBranch := False
@@ -53,11 +56,19 @@ class DecodeUnit(config: SmConfig) extends Component {
       io.decoded.writesRd := True
     }
     is(B(Opcode.ADD, 8 bits), B(Opcode.SUB, 8 bits), B(Opcode.MULLO, 8 bits), B(Opcode.AND, 8 bits), B(Opcode.OR, 8 bits),
-      B(Opcode.XOR, 8 bits), B(Opcode.SHL, 8 bits), B(Opcode.SHR, 8 bits), B(Opcode.SETEQ, 8 bits), B(Opcode.SETLT, 8 bits)) {
+      B(Opcode.XOR, 8 bits), B(Opcode.SHL, 8 bits), B(Opcode.SHR, 8 bits), B(Opcode.SETEQ, 8 bits), B(Opcode.SETLT, 8 bits),
+      B(Opcode.FADD, 8 bits), B(Opcode.FMUL, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.CUDA
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True
       io.decoded.usesRs1 := True
+    }
+    is(B(Opcode.FFMA, 8 bits)) {
+      io.decoded.target := ExecutionUnitKind.CUDA
+      io.decoded.writesRd := True
+      io.decoded.usesRs0 := True
+      io.decoded.usesRs1 := True
+      io.decoded.usesRs2 := True
     }
     is(B(Opcode.ADDI, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.CUDA

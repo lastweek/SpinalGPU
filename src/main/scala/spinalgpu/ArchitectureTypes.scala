@@ -14,7 +14,11 @@ object AddressSpaceKind extends SpinalEnum {
 case class KernelCommandDesc(config: SmConfig) extends Bundle {
   val entryPc = UInt(config.addressWidth bits)
   val gridDimX = UInt(config.dataWidth bits)
+  val gridDimY = UInt(config.dataWidth bits)
+  val gridDimZ = UInt(config.dataWidth bits)
   val blockDimX = UInt(config.threadCountWidth bits)
+  val blockDimY = UInt(config.threadCountWidth bits)
+  val blockDimZ = UInt(config.threadCountWidth bits)
   val argBase = UInt(config.addressWidth bits)
   val sharedBytes = UInt(config.sharedBytesWidth bits)
 }
@@ -25,6 +29,9 @@ case class WarpContext(config: SmConfig) extends Bundle {
   val pc = UInt(config.addressWidth bits)
   val activeMask = Bits(config.warpSize bits)
   val threadBase = UInt(config.threadCountWidth bits)
+  val threadBaseX = UInt(config.threadCountWidth bits)
+  val threadBaseY = UInt(config.threadCountWidth bits)
+  val threadBaseZ = UInt(config.threadCountWidth bits)
   val threadCount = UInt(config.threadCountWidth bits)
   val outstanding = Bool()
   val exited = Bool()
@@ -54,6 +61,17 @@ case class FetchRsp(config: SmConfig) extends Bundle {
   val faultCode = UInt(config.faultCodeWidth bits)
 }
 
+case class FetchMemReq(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val address = UInt(config.addressWidth bits)
+}
+
+case class FetchMemRsp(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val error = Bool()
+  val readData = Bits(config.dataWidth bits)
+}
+
 case class DecodedInstruction(config: SmConfig) extends Bundle {
   val valid = Bool()
   val illegal = Bool()
@@ -62,12 +80,14 @@ case class DecodedInstruction(config: SmConfig) extends Bundle {
   val rd = UInt(config.registerAddressWidth bits)
   val rs0 = UInt(config.registerAddressWidth bits)
   val rs1 = UInt(config.registerAddressWidth bits)
+  val rs2 = UInt(config.registerAddressWidth bits)
   val immediate = SInt(config.dataWidth bits)
   val specialRegister = UInt(config.specialRegisterWidth bits)
   val addressSpace = AddressSpaceKind()
   val writesRd = Bool()
   val usesRs0 = Bool()
   val usesRs1 = Bool()
+  val usesRs2 = Bool()
   val isStore = Bool()
   val isLoad = Bool()
   val isBranch = Bool()
@@ -94,8 +114,9 @@ case class CudaIssueReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val opcode = Bits(8 bits)
   val activeMask = Bits(config.warpSize bits)
-  val operandA = Vec(UInt(config.dataWidth bits), config.warpSize)
-  val operandB = Vec(UInt(config.dataWidth bits), config.warpSize)
+  val operandA = Vec(Bits(config.dataWidth bits), config.warpSize)
+  val operandB = Vec(Bits(config.dataWidth bits), config.warpSize)
+  val operandC = Vec(Bits(config.dataWidth bits), config.warpSize)
 }
 
 case class CudaIssueRsp(config: SmConfig) extends Bundle {
@@ -166,19 +187,38 @@ case class SharedMemRsp(config: SmConfig) extends Bundle {
   val bankIndex = UInt(config.sharedBankIndexWidth bits)
 }
 
-case class ExternalMemReq(config: SmConfig) extends Bundle {
+case class GlobalMemBurstReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val write = Bool()
   val address = UInt(config.addressWidth bits)
-  val writeData = Bits(config.dataWidth bits)
+  val beatCount = UInt(config.globalBurstBeatCountWidth bits)
+  val writeData = Vec(Bits(config.dataWidth bits), config.cudaLaneCount)
   val byteMask = Bits(config.byteMaskWidth bits)
 }
 
-case class ExternalMemRsp(config: SmConfig) extends Bundle {
+case class GlobalMemBurstRsp(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val completed = Bool()
   val error = Bool()
-  val readData = Bits(config.dataWidth bits)
+  val beatCount = UInt(config.globalBurstBeatCountWidth bits)
+  val readData = Vec(Bits(config.dataWidth bits), config.cudaLaneCount)
+}
+
+case class ExternalMemBurstReq(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val write = Bool()
+  val address = UInt(config.addressWidth bits)
+  val beatCount = UInt(config.globalBurstBeatCountWidth bits)
+  val writeData = Vec(Bits(config.dataWidth bits), config.cudaLaneCount)
+  val byteMask = Bits(config.byteMaskWidth bits)
+}
+
+case class ExternalMemBurstRsp(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val completed = Bool()
+  val error = Bool()
+  val beatCount = UInt(config.globalBurstBeatCountWidth bits)
+  val readData = Vec(Bits(config.dataWidth bits), config.cudaLaneCount)
 }
 
 case class KernelExecutionStatus(config: SmConfig) extends Bundle {

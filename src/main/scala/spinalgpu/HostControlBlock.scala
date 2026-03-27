@@ -15,7 +15,11 @@ class HostControlBlock(config: SmConfig) extends Component {
 
   private val entryPcReg = Reg(UInt(config.addressWidth bits)) init (0)
   private val gridDimXReg = Reg(UInt(config.dataWidth bits)) init (1)
+  private val gridDimYReg = Reg(UInt(config.dataWidth bits)) init (1)
+  private val gridDimZReg = Reg(UInt(config.dataWidth bits)) init (1)
   private val blockDimXReg = Reg(UInt(config.threadCountWidth bits)) init (0)
+  private val blockDimYReg = Reg(UInt(config.threadCountWidth bits)) init (1)
+  private val blockDimZReg = Reg(UInt(config.threadCountWidth bits)) init (1)
   private val argBaseReg = Reg(UInt(config.addressWidth bits)) init (0)
   private val sharedBytesReg = Reg(UInt(config.sharedBytesWidth bits)) init (0)
 
@@ -35,7 +39,11 @@ class HostControlBlock(config: SmConfig) extends Component {
 
   io.command.entryPc := entryPcReg
   io.command.gridDimX := gridDimXReg
+  io.command.gridDimY := gridDimYReg
+  io.command.gridDimZ := gridDimZReg
   io.command.blockDimX := blockDimXReg
+  io.command.blockDimY := blockDimYReg
+  io.command.blockDimZ := blockDimZReg
   io.command.argBase := argBaseReg
   io.command.sharedBytes := sharedBytesReg
 
@@ -90,8 +98,20 @@ class HostControlBlock(config: SmConfig) extends Component {
       is(U(ControlRegisters.GridDimX >> 2, config.controlAddressWidth - 2 bits)) {
         gridDimXReg := applyWriteMask(gridDimXReg.asBits, writeDataReg, writeStrbReg).asUInt
       }
+      is(U(ControlRegisters.GridDimY >> 2, config.controlAddressWidth - 2 bits)) {
+        gridDimYReg := applyWriteMask(gridDimYReg.asBits, writeDataReg, writeStrbReg).asUInt
+      }
+      is(U(ControlRegisters.GridDimZ >> 2, config.controlAddressWidth - 2 bits)) {
+        gridDimZReg := applyWriteMask(gridDimZReg.asBits, writeDataReg, writeStrbReg).asUInt
+      }
       is(U(ControlRegisters.BlockDimX >> 2, config.controlAddressWidth - 2 bits)) {
         blockDimXReg := applyWriteMask(blockDimXReg.resize(config.dataWidth).asBits, writeDataReg, writeStrbReg).asUInt.resized
+      }
+      is(U(ControlRegisters.BlockDimY >> 2, config.controlAddressWidth - 2 bits)) {
+        blockDimYReg := applyWriteMask(blockDimYReg.resize(config.dataWidth).asBits, writeDataReg, writeStrbReg).asUInt.resized
+      }
+      is(U(ControlRegisters.BlockDimZ >> 2, config.controlAddressWidth - 2 bits)) {
+        blockDimZReg := applyWriteMask(blockDimZReg.resize(config.dataWidth).asBits, writeDataReg, writeStrbReg).asUInt.resized
       }
       is(U(ControlRegisters.ArgBase >> 2, config.controlAddressWidth - 2 bits)) {
         argBaseReg := applyWriteMask(argBaseReg.asBits, writeDataReg, writeStrbReg).asUInt
@@ -130,8 +150,20 @@ class HostControlBlock(config: SmConfig) extends Component {
       is(U(ControlRegisters.GridDimX >> 2, config.controlAddressWidth - 2 bits)) {
         readDataReg := gridDimXReg.asBits
       }
+      is(U(ControlRegisters.GridDimY >> 2, config.controlAddressWidth - 2 bits)) {
+        readDataReg := gridDimYReg.asBits
+      }
+      is(U(ControlRegisters.GridDimZ >> 2, config.controlAddressWidth - 2 bits)) {
+        readDataReg := gridDimZReg.asBits
+      }
       is(U(ControlRegisters.BlockDimX >> 2, config.controlAddressWidth - 2 bits)) {
         readDataReg := blockDimXReg.resize(config.dataWidth).asBits
+      }
+      is(U(ControlRegisters.BlockDimY >> 2, config.controlAddressWidth - 2 bits)) {
+        readDataReg := blockDimYReg.resize(config.dataWidth).asBits
+      }
+      is(U(ControlRegisters.BlockDimZ >> 2, config.controlAddressWidth - 2 bits)) {
+        readDataReg := blockDimZReg.resize(config.dataWidth).asBits
       }
       is(U(ControlRegisters.ArgBase >> 2, config.controlAddressWidth - 2 bits)) {
         readDataReg := argBaseReg.asBits

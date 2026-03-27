@@ -7,8 +7,8 @@ class InstructionFetchUnit(config: SmConfig) extends Component {
   val io = new Bundle {
     val request = slave(Stream(FetchReq(config)))
     val response = master(Stream(FetchRsp(config)))
-    val memoryReq = master(Stream(ExternalMemReq(config)))
-    val memoryRsp = slave(Stream(ExternalMemRsp(config)))
+    val memoryReq = master(Stream(FetchMemReq(config)))
+    val memoryRsp = slave(Stream(FetchMemRsp(config)))
   }
 
   private val pendingWarpId = Reg(UInt(config.warpIdWidth bits)) init (0)
@@ -24,10 +24,7 @@ class InstructionFetchUnit(config: SmConfig) extends Component {
 
   io.memoryReq.valid := io.request.valid && canAcceptRequest && !misaligned
   io.memoryReq.payload.warpId := io.request.payload.warpId
-  io.memoryReq.payload.write := False
   io.memoryReq.payload.address := io.request.payload.pc
-  io.memoryReq.payload.writeData := B(0, config.dataWidth bits)
-  io.memoryReq.payload.byteMask := B((1 << config.byteMaskWidth) - 1, config.byteMaskWidth bits)
 
   io.memoryRsp.ready := waitingOnMemory && !rspValid
 

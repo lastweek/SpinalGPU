@@ -1,0 +1,77 @@
+// Purpose: Multiply two FP32 row-major matrices using CUDA cores and fused multiply-add.
+// Primary feature: floating_point
+// Expected outcome: success
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry matrix_mul_f32(
+    .param .u32 a_ptr_param,
+    .param .u32 b_ptr_param,
+    .param .u32 c_ptr_param,
+    .param .u32 m_param,
+    .param .u32 n_param,
+    .param .u32 k_param,
+    .param .u32 lda_param,
+    .param .u32 ldb_param,
+    .param .u32 ldc_param
+)
+{
+    .reg .u32 %r<21>;
+    .reg .f32 %f<3>;
+    .pred %p<3>;
+
+    // Setup
+    ld.param.u32 %r0, [a_ptr_param];
+    ld.param.u32 %r1, [b_ptr_param];
+    ld.param.u32 %r2, [c_ptr_param];
+    ld.param.u32 %r3, [m_param];
+    ld.param.u32 %r4, [n_param];
+    ld.param.u32 %r5, [k_param];
+    ld.param.u32 %r6, [lda_param];
+    ld.param.u32 %r7, [ldb_param];
+    ld.param.u32 %r8, [ldc_param];
+    mov.u32 %r9, %tid.x;
+    mov.u32 %r10, %tid.y;
+
+    // Core
+    setp.lt.u32 %p0, %r10, %r3;
+    @!%p0 bra done;
+    setp.lt.u32 %p1, %r9, %r4;
+    @!%p1 bra done;
+
+    mov.u32 %r11, 0;
+    mov.f32 %f0, 0f00000000;
+
+loop:
+    setp.lt.u32 %p2, %r11, %r5;
+    @!%p2 bra store_result;
+
+    mul.lo.u32 %r12, %r10, %r6;
+    add.u32 %r12, %r12, %r11;
+    shl.b32 %r13, %r12, 2;
+    add.u32 %r14, %r0, %r13;
+
+    mul.lo.u32 %r15, %r11, %r7;
+    add.u32 %r15, %r15, %r9;
+    shl.b32 %r16, %r15, 2;
+    add.u32 %r17, %r1, %r16;
+
+    ld.global.f32 %f1, [%r14];
+    ld.global.f32 %f2, [%r17];
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+
+    add.u32 %r11, %r11, 1;
+    bra loop;
+
+store_result:
+    mul.lo.u32 %r18, %r10, %r8;
+    add.u32 %r18, %r18, %r9;
+    shl.b32 %r19, %r18, 2;
+    add.u32 %r20, %r2, %r19;
+    st.global.f32 [%r20], %f0;
+
+    // Exit
+done:
+    ret;
+}

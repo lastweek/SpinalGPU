@@ -19,6 +19,10 @@ object KernelCorpus {
       override val id: String = "arithmetic"
     }
 
+    case object FloatingPoint extends KernelFeature {
+      override val id: String = "floating_point"
+    }
+
     case object Control extends KernelFeature {
       override val id: String = "control"
     }
@@ -72,8 +76,12 @@ object KernelCorpus {
   final case class KernelCommand(
       entryPc: Long,
       blockDimX: Int,
+      blockDimY: Int = 1,
+      blockDimZ: Int = 1,
       argBase: Long = 0L,
       gridDimX: Long = 1L,
+      gridDimY: Long = 1L,
+      gridDimZ: Long = 1L,
       sharedBytes: Int = 0
   )
 
@@ -83,6 +91,7 @@ object KernelCorpus {
   object PreloadOp {
     final case class WriteArgBuffer(base: Long, values: Seq[Long]) extends PreloadOp
     final case class WriteDataWords(base: Long, values: Seq[Long]) extends PreloadOp
+    final case class WriteDataF32(base: Long, values: Seq[Float]) extends PreloadOp
   }
 
   /** Declarative success checks against the simulated memory image after completion. */
@@ -90,6 +99,7 @@ object KernelCorpus {
 
   object SuccessCheck {
     final case class ExpectWords(base: Long, values: Seq[Long]) extends SuccessCheck
+    final case class ExpectF32(base: Long, values: Seq[Float]) extends SuccessCheck
   }
 
   /** Declarative completion model for a kernel case. */
@@ -142,6 +152,38 @@ object KernelCorpus {
   import KernelLevel._
   import PreloadOp._
   import SuccessCheck._
+
+  private def matrixAddInputA(rows: Int, cols: Int): Seq[Float] =
+    (0 until rows * cols).map(index => (index.toFloat * 0.5f) - 7.0f)
+
+  private def matrixAddInputB(rows: Int, cols: Int): Seq[Float] =
+    (0 until rows * cols).map(index => (index.toFloat * 1.25f) + 3.0f)
+
+  private def matrixAddExpected(rows: Int, cols: Int): Seq[Float] =
+    matrixAddInputA(rows, cols).zip(matrixAddInputB(rows, cols)).map { case (a, b) => a + b }
+
+  private def matrixMulInputA(m: Int, k: Int): Seq[Float] =
+    (0 until m * k).map(index => ((index % k).toFloat * 0.25f) + (index / k).toFloat)
+
+  private def matrixMulInputB(k: Int, n: Int): Seq[Float] =
+    (0 until k * n).map(index => ((index / n).toFloat * 0.75f) - ((index % n).toFloat * 0.5f))
+
+  private def matrixMulExpected(m: Int, n: Int, k: Int): Seq[Float] = {
+    val a = matrixMulInputA(m, k)
+    val b = matrixMulInputB(k, n)
+    for {
+      row <- 0 until m
+      col <- 0 until n
+    } yield {
+      var sum = 0.0f
+      var kk = 0
+      while (kk < k) {
+        sum = sum + (a(row * k + kk) * b(kk * n + col))
+        kk += 1
+      }
+      sum
+    }
+  }
 
   val addStoreExit: KernelCase = KernelCase(
     name = "add_store_exit",
@@ -253,6 +295,42 @@ object KernelCorpus {
     harnessTargets = Seq(StreamingMultiprocessor)
   )
 
+  val matrixAddF32: KernelCase = KernelCase(
+    name = "matrix_add_f32",
+    relativeSourcePath = "arithmetic/matrix_add_f32.ptx",
+    purpose = "Add two FP32 row-major matrices using CUDA cores and 2D thread coordinates.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, blockDimY = 8, argBase = 0x300),
+    timeoutCycles = 80000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x1000, values = matrixAddInputA(rows = 8, cols = 8)),
+      WriteDataF32(base = 0x1200, values = matrixAddInputB(rows = 8, cols = 8)),
+      WriteArgBuffer(base = 0x300, values = Seq(0x1000L, 0x1200L, 0x1400L, 8L, 8L, 8L, 8L, 8L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x1400, values = matrixAddExpected(rows = 8, cols = 8)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val matrixMulF32: KernelCase = KernelCase(
+    name = "matrix_mul_f32",
+    relativeSourcePath = "arithmetic/matrix_mul_f32.ptx",
+    purpose = "Multiply two FP32 row-major matrices using CUDA cores and fused multiply-add.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, blockDimY = 8, argBase = 0x340),
+    timeoutCycles = 200000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x1800, values = matrixMulInputA(m = 8, k = 8)),
+      WriteDataF32(base = 0x1A00, values = matrixMulInputB(k = 8, n = 8)),
+      WriteArgBuffer(base = 0x340, values = Seq(0x1800L, 0x1A00L, 0x1C00L, 8L, 8L, 8L, 8L, 8L, 8L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x1C00, values = matrixMulExpected(m = 8, n = 8, k = 8)))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
   val registerStress: KernelCase = KernelCase(
     name = "register_stress",
     relativeSourcePath = "arithmetic/register_stress.ptx",
@@ -310,6 +388,8 @@ object KernelCorpus {
     uniformLoop,
     sharedRoundtrip,
     vectorAdd1Warp,
+    matrixAddF32,
+    matrixMulF32,
     registerStress,
     nonUniformBranch,
     misalignedStore,

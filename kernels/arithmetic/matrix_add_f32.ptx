@@ -1,0 +1,64 @@
+// Purpose: Add two FP32 row-major matrices using CUDA cores and 2D thread coordinates.
+// Primary feature: floating_point
+// Expected outcome: success
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry matrix_add_f32(
+    .param .u32 a_ptr_param,
+    .param .u32 b_ptr_param,
+    .param .u32 c_ptr_param,
+    .param .u32 rows_param,
+    .param .u32 cols_param,
+    .param .u32 lda_param,
+    .param .u32 ldb_param,
+    .param .u32 ldc_param
+)
+{
+    .reg .u32 %r<19>;
+    .reg .f32 %f<3>;
+    .pred %p<2>;
+
+    // Setup
+    ld.param.u32 %r0, [a_ptr_param];
+    ld.param.u32 %r1, [b_ptr_param];
+    ld.param.u32 %r2, [c_ptr_param];
+    ld.param.u32 %r3, [rows_param];
+    ld.param.u32 %r4, [cols_param];
+    ld.param.u32 %r5, [lda_param];
+    ld.param.u32 %r6, [ldb_param];
+    ld.param.u32 %r7, [ldc_param];
+    mov.u32 %r8, %tid.x;
+    mov.u32 %r9, %tid.y;
+
+    // Core
+    setp.lt.u32 %p0, %r9, %r3;
+    @!%p0 bra done;
+    setp.lt.u32 %p1, %r8, %r4;
+    @!%p1 bra done;
+
+    mul.lo.u32 %r10, %r9, %r5;
+    add.u32 %r10, %r10, %r8;
+    shl.b32 %r11, %r10, 2;
+    add.u32 %r12, %r0, %r11;
+
+    mul.lo.u32 %r13, %r9, %r6;
+    add.u32 %r13, %r13, %r8;
+    shl.b32 %r14, %r13, 2;
+    add.u32 %r15, %r1, %r14;
+
+    mul.lo.u32 %r16, %r9, %r7;
+    add.u32 %r16, %r16, %r8;
+    shl.b32 %r17, %r16, 2;
+    add.u32 %r18, %r2, %r17;
+
+    ld.global.f32 %f0, [%r12];
+    ld.global.f32 %f1, [%r15];
+    add.f32 %f2, %f0, %f1;
+    st.global.f32 [%r18], %f2;
+
+    // Exit
+done:
+    ret;
+}

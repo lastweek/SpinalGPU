@@ -8,8 +8,10 @@ class WarpRegisterFile(config: SmConfig) extends Component {
     val readWarpId = in(UInt(config.warpIdWidth bits))
     val readAddrA = in(UInt(config.registerAddressWidth bits))
     val readAddrB = in(UInt(config.registerAddressWidth bits))
+    val readAddrC = in(UInt(config.registerAddressWidth bits))
     val readDataA = out(Vec(UInt(config.dataWidth bits), config.warpSize))
     val readDataB = out(Vec(UInt(config.dataWidth bits), config.warpSize))
+    val readDataC = out(Vec(UInt(config.dataWidth bits), config.warpSize))
     val write = slave(Flow(WritebackPacket(config)))
     val clearWarp = slave(Flow(UInt(config.warpIdWidth bits)))
   }
@@ -36,6 +38,7 @@ class WarpRegisterFile(config: SmConfig) extends Component {
   for (lane <- 0 until config.warpSize) {
     io.readDataA(lane) := U(0, config.dataWidth bits)
     io.readDataB(lane) := U(0, config.dataWidth bits)
+    io.readDataC(lane) := U(0, config.dataWidth bits)
 
     when(io.readAddrA =/= 0) {
       io.readDataA(lane) := file(io.readWarpId)(lane)(io.readAddrA)
@@ -43,6 +46,10 @@ class WarpRegisterFile(config: SmConfig) extends Component {
 
     when(io.readAddrB =/= 0) {
       io.readDataB(lane) := file(io.readWarpId)(lane)(io.readAddrB)
+    }
+
+    when(io.readAddrC =/= 0) {
+      io.readDataC(lane) := file(io.readWarpId)(lane)(io.readAddrC)
     }
   }
 }

@@ -6,8 +6,8 @@ import spinal.lib.bus.amba4.axi._
 
 class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   val io = new Bundle {
-    val request = slave(Stream(ExternalMemReq(config)))
-    val response = master(Stream(ExternalMemRsp(config)))
+    val request = slave(Stream(ExternalMemBurstReq(config)))
+    val response = master(Stream(ExternalMemBurstRsp(config)))
     val axi = master(Axi4(config.axiConfig))
   }
 
@@ -16,11 +16,14 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   }
 
   private val state = RegInit(AdapterState.IDLE)
-  private val pending = Reg(ExternalMemReq(config))
+  private val pending = Reg(ExternalMemBurstReq(config))
   private val rspValid = RegInit(False)
-  private val rspPayload = Reg(ExternalMemRsp(config))
+  private val rspPayload = Reg(ExternalMemBurstRsp(config))
   private val writeAddressSent = RegInit(False)
-  private val writeDataSent = RegInit(False)
+  private val beatIndexWidth = log2Up(config.cudaLaneCount)
+  private val writeBeatIndex = Reg(UInt(config.globalBurstBeatCountWidth bits)) init (0)
+  private val readBeatIndex = Reg(UInt(config.globalBurstBeatCountWidth bits)) init (0)
+  private val readError = RegInit(False)
 
   io.request.ready := state === AdapterState.IDLE && !rspValid
 
@@ -29,20 +32,20 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
 
   io.axi.aw.valid := False
   io.axi.aw.addr := pending.address
-  io.axi.aw.len := 0
+  io.axi.aw.len := (pending.beatCount - 1).resized
   io.axi.aw.setFullSize()
   io.axi.aw.setBurstINCR()
 
   io.axi.w.valid := False
-  io.axi.w.data := pending.writeData
+  io.axi.w.data := pending.writeData(writeBeatIndex.resize(beatIndexWidth bits))
   io.axi.w.strb := pending.byteMask
-  io.axi.w.last := True
+  io.axi.w.last := writeBeatIndex === pending.beatCount - 1
 
   io.axi.b.ready := False
 
   io.axi.ar.valid := False
   io.axi.ar.addr := pending.address
-  io.axi.ar.len := 0
+  io.axi.ar.len := (pending.beatCount - 1).resized
   io.axi.ar.setFullSize()
   io.axi.ar.setBurstINCR()
 
@@ -50,11 +53,20 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
 
   when(io.request.fire) {
     pending := io.request.payload
+    rspPayload.warpId := io.request.payload.warpId
+    rspPayload.completed := True
+    rspPayload.error := False
+    rspPayload.beatCount := io.request.payload.beatCount
+    for (beat <- 0 until config.cudaLaneCount) {
+      rspPayload.readData(beat) := B(0, config.dataWidth bits)
+    }
     when(io.request.payload.write) {
       writeAddressSent := False
-      writeDataSent := False
+      writeBeatIndex := 0
       state := AdapterState.WRITE_ADDR
     } otherwise {
+      readBeatIndex := 0
+      readError := False
       state := AdapterState.READ_ADDR
     }
   }
@@ -68,17 +80,17 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
 
     is(AdapterState.WRITE_ADDR) {
       io.axi.aw.valid := !writeAddressSent
-      io.axi.w.valid := !writeDataSent
+      io.axi.w.valid := writeBeatIndex < pending.beatCount
 
       when(io.axi.aw.fire) {
         writeAddressSent := True
       }
 
       when(io.axi.w.fire) {
-        writeDataSent := True
+        writeBeatIndex := writeBeatIndex + 1
       }
 
-      when((writeAddressSent || io.axi.aw.fire) && (writeDataSent || io.axi.w.fire)) {
+      when((writeAddressSent || io.axi.aw.fire) && (writeBeatIndex === pending.beatCount || (io.axi.w.fire && writeBeatIndex === pending.beatCount - 1))) {
         state := AdapterState.WRITE_RSP
       }
     }
@@ -87,10 +99,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
       io.axi.b.ready := True
       when(io.axi.b.valid) {
         rspValid := True
-        rspPayload.warpId := pending.warpId
-        rspPayload.completed := True
         rspPayload.error := io.axi.b.isSLVERR() || io.axi.b.isDECERR()
-        rspPayload.readData := 0
         state := AdapterState.IDLE
       }
     }
@@ -105,12 +114,13 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
     is(AdapterState.READ_RSP) {
       io.axi.r.ready := True
       when(io.axi.r.valid) {
-        rspValid := True
-        rspPayload.warpId := pending.warpId
-        rspPayload.completed := io.axi.r.last
-        rspPayload.error := io.axi.r.isSLVERR() || io.axi.r.isDECERR()
-        rspPayload.readData := io.axi.r.data
+        rspPayload.readData(readBeatIndex.resize(beatIndexWidth bits)) := io.axi.r.data
+        readError := readError || io.axi.r.isSLVERR() || io.axi.r.isDECERR()
+        readBeatIndex := readBeatIndex + 1
         when(io.axi.r.last) {
+          rspValid := True
+          rspPayload.completed := True
+          rspPayload.error := readError || io.axi.r.isSLVERR() || io.axi.r.isDECERR()
           state := AdapterState.IDLE
         }
       }

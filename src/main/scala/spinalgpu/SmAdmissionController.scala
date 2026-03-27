@@ -20,6 +20,11 @@ class SmAdmissionController(config: SmConfig) extends Component {
     val trapInfo = slave(Flow(TrapInfo(config)))
     val currentCommand = out(KernelCommandDesc(config))
     val currentGridId = out(UInt(64 bits))
+    val invalidGridDim = out Bool()
+    val invalidBlockDimZero = out Bool()
+    val invalidBlockThreadCount = out Bool()
+    val invalidSharedBytes = out Bool()
+    val requestedBlockThreadCount = out(UInt((config.threadCountWidth * 3) bits))
     val executionStatus = out(KernelExecutionStatus(config))
   }
 
@@ -33,6 +38,7 @@ class SmAdmissionController(config: SmConfig) extends Component {
   private val trapPendingCode = Reg(UInt(config.faultCodeWidth bits)) init (FaultCode.None)
   private val currentGridId = Reg(UInt(64 bits)) init (0)
   private val nextGridId = Reg(UInt(64 bits)) init (0)
+  private val blockThreadCountWidth = config.threadCountWidth * 3
 
   executionStatus.busy.init(False)
   executionStatus.done.init(False)
@@ -41,8 +47,12 @@ class SmAdmissionController(config: SmConfig) extends Component {
   executionStatus.faultCode.init(FaultCode.None)
 
   currentCommand.entryPc.init(0)
-  currentCommand.gridDimX.init(0)
+  currentCommand.gridDimX.init(1)
+  currentCommand.gridDimY.init(1)
+  currentCommand.gridDimZ.init(1)
   currentCommand.blockDimX.init(0)
+  currentCommand.blockDimY.init(0)
+  currentCommand.blockDimZ.init(0)
   currentCommand.argBase.init(0)
   currentCommand.sharedBytes.init(0)
 
@@ -54,6 +64,9 @@ class SmAdmissionController(config: SmConfig) extends Component {
   io.warpInitWrite.payload.context.pc := 0
   io.warpInitWrite.payload.context.activeMask := 0
   io.warpInitWrite.payload.context.threadBase := 0
+  io.warpInitWrite.payload.context.threadBaseX := 0
+  io.warpInitWrite.payload.context.threadBaseY := 0
+  io.warpInitWrite.payload.context.threadBaseZ := 0
   io.warpInitWrite.payload.context.threadCount := 0
   io.warpInitWrite.payload.context.outstanding := False
   io.warpInitWrite.payload.context.exited := False
@@ -71,6 +84,28 @@ class SmAdmissionController(config: SmConfig) extends Component {
     }
     mask
   }
+
+  private val requestedBlockThreadCountWide = UInt(blockThreadCountWidth bits)
+  requestedBlockThreadCountWide := (io.command.blockDimX.resize(blockThreadCountWidth bits) *
+    io.command.blockDimY.resize(blockThreadCountWidth bits) *
+    io.command.blockDimZ.resize(blockThreadCountWidth bits)).resized
+  private val invalidGridDim = io.command.gridDimX =/= 1 || io.command.gridDimY =/= 1 || io.command.gridDimZ =/= 1
+  private val invalidBlockDimZero = io.command.blockDimX === 0 || io.command.blockDimY === 0 || io.command.blockDimZ === 0
+  private val invalidBlockThreadCount =
+    requestedBlockThreadCountWide === 0 || requestedBlockThreadCountWide > U(config.maxBlockThreads, requestedBlockThreadCountWide.getWidth bits)
+  private val invalidSharedBytes = io.command.sharedBytes > U(config.sharedMemoryBytes, io.command.sharedBytes.getWidth bits)
+  io.invalidGridDim := invalidGridDim
+  io.invalidBlockDimZero := invalidBlockDimZero
+  io.invalidBlockThreadCount := invalidBlockThreadCount
+  io.invalidSharedBytes := invalidSharedBytes
+  io.requestedBlockThreadCount := requestedBlockThreadCountWide
+
+  private val currentBlockThreadCountWide = UInt(blockThreadCountWidth bits)
+  currentBlockThreadCountWide := (currentCommand.blockDimX.resize(blockThreadCountWidth bits) *
+    currentCommand.blockDimY.resize(blockThreadCountWidth bits) *
+    currentCommand.blockDimZ.resize(blockThreadCountWidth bits)).resized
+  private val currentBlockThreadCount = UInt(config.threadCountWidth bits)
+  currentBlockThreadCount := currentBlockThreadCountWide.resized
 
   when(io.clearDone && !executionStatus.busy) {
     executionStatus.done := False
@@ -94,7 +129,7 @@ class SmAdmissionController(config: SmConfig) extends Component {
     executionStatus.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
     trapPendingValid := False
 
-    when(io.command.gridDimX =/= 1 || io.command.blockDimX === 0 || io.command.blockDimX > config.maxBlockThreads || io.command.sharedBytes > config.sharedMemoryBytes) {
+    when(invalidGridDim || invalidBlockDimZero || invalidBlockThreadCount || invalidSharedBytes) {
       executionStatus.done := True
       executionStatus.fault := True
       executionStatus.faultPc := io.command.entryPc
@@ -122,10 +157,13 @@ class SmAdmissionController(config: SmConfig) extends Component {
     }
 
     is(State.INIT_WARPS) {
-      val baseThread = (initIndex.resize(config.threadCountWidth bits) * U(config.warpSize, config.threadCountWidth bits)).resized
+      val baseThread = UInt(config.threadCountWidth bits)
+      baseThread := (initIndex.resize(config.threadCountWidth bits) * U(config.warpSize, config.threadCountWidth bits)).resized
+      val (baseThreadX, baseThreadY, baseThreadZ) =
+        ThreadCoordinateLogic.linearToCoords(config, baseThread, currentCommand.blockDimX, currentCommand.blockDimY, currentCommand.blockDimZ)
       val remaining = UInt(config.threadCountWidth bits)
-      when(currentCommand.blockDimX > baseThread) {
-        remaining := currentCommand.blockDimX - baseThread
+      when(currentBlockThreadCount > baseThread) {
+        remaining := currentBlockThreadCount - baseThread
       } otherwise {
         remaining := U(0, config.threadCountWidth bits)
       }
@@ -143,6 +181,9 @@ class SmAdmissionController(config: SmConfig) extends Component {
       io.warpInitWrite.payload.context.pc := currentCommand.entryPc
       io.warpInitWrite.payload.context.activeMask := laneMask(laneCount)
       io.warpInitWrite.payload.context.threadBase := baseThread
+      io.warpInitWrite.payload.context.threadBaseX := baseThreadX
+      io.warpInitWrite.payload.context.threadBaseY := baseThreadY
+      io.warpInitWrite.payload.context.threadBaseZ := baseThreadZ
       io.warpInitWrite.payload.context.threadCount := laneCount
       io.warpInitWrite.payload.context.outstanding := False
       io.warpInitWrite.payload.context.exited := False

@@ -28,6 +28,8 @@ object KernelCorpusTestUtils {
       ExecutionTestUtils.writeArgBuffer(memory, base, values, byteCount)
     case PreloadOp.WriteDataWords(base, values) =>
       ExecutionTestUtils.writeDataWords(memory, base, values, byteCount)
+    case PreloadOp.WriteDataF32(base, values) =>
+      ExecutionTestUtils.writeDataF32(memory, base, values, byteCount)
   }
 
   /** Checks one success condition from the declarative corpus definition. */
@@ -40,6 +42,16 @@ object KernelCorpusTestUtils {
         assert(
           actual == expectedWord,
           f"memory[0x$address%X] expected 0x${expectedWord.toString(16)} but saw 0x${actual.toString(16)}"
+        )
+      }
+    case SuccessCheck.ExpectF32(base, values) =>
+      values.zipWithIndex.foreach { case (expected, index) =>
+        val address = base + (index.toLong * byteCount)
+        val actual = ExecutionTestUtils.readWord(memory, address, byteCount)
+        val expectedWord = ExecutionTestUtils.u32(ExecutionTestUtils.f32Bits(expected))
+        assert(
+          actual == expectedWord,
+          f"memory[0x$address%X] expected f32 bits 0x${expectedWord.toString(16)} but saw 0x${actual.toString(16)}"
         )
       }
   }
@@ -70,7 +82,11 @@ object KernelCorpusTestUtils {
       dut.io.command.clearDone #= false
       dut.io.command.command.entryPc #= kernel.command.entryPc
       dut.io.command.command.gridDimX #= kernel.command.gridDimX
+      dut.io.command.command.gridDimY #= kernel.command.gridDimY
+      dut.io.command.command.gridDimZ #= kernel.command.gridDimZ
       dut.io.command.command.blockDimX #= kernel.command.blockDimX
+      dut.io.command.command.blockDimY #= kernel.command.blockDimY
+      dut.io.command.command.blockDimZ #= kernel.command.blockDimZ
       dut.io.command.command.argBase #= kernel.command.argBase
       dut.io.command.command.sharedBytes #= kernel.command.sharedBytes
       dut.clockDomain.waitSampling()
@@ -132,21 +148,7 @@ object KernelCorpusTestUtils {
 
       loadKernelCase(memory, kernel, config.byteCount)
       ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
-
-      var cycles = 0
-      while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
-        dut.coreClockDomain.waitSampling()
-        cycles += 1
-      }
-
-      assert(
-        dut.io.debugExecutionStatus.done.toBoolean,
-        s"${kernel.name} (${kernel.relativeSourcePath}) did not complete after $cycles cycles; " +
-          s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
-          s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
-          s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
-          s"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
-      )
+      ExecutionTestUtils.waitForExecutionComplete(hostControl, dut.coreClockDomain, timeoutCycles = kernel.timeoutCycles)
 
       assertKernelExpectation(
         memory,

@@ -15,6 +15,8 @@ This document describes the internal machine encoding executed by the current ha
   - `opcode[31:24] | rd[23:19] | rs0[18:14] | rs1[13:9] | reserved[8:0]`
 - `RRI`
   - `opcode[31:24] | rd[23:19] | rs0[18:14] | imm14[13:0]`
+- `RRRR`
+  - `opcode[31:24] | rd[23:19] | rs0[18:14] | rs1[13:9] | rs2[8:4] | reserved[3:0]`
 - `MEM`
   - `opcode[31:24] | reg[23:19] | base[18:14] | off14[13:0]`
 - `BR`
@@ -42,7 +44,10 @@ Immediate and branch offsets are signed 14-bit values.
 | `0x17` | `shl` | Logical shift left |
 | `0x18` | `shr` | Logical shift right |
 | `0x19` | `seteq` | Set `1` when equal, else `0` |
-| `0x1A` | `setlt` | Set `1` when signed less-than, else `0` |
+| `0x1A` | `setlt` | Set `1` when unsigned less-than, else `0` |
+| `0x1B` | `fadd` | FP32 add |
+| `0x1C` | `fmul` | FP32 multiply |
+| `0x1D` | `ffma` | FP32 fused multiply-add |
 | `0x20` | `ldg` | Load from global memory |
 | `0x21` | `stg` | Store to global memory |
 | `0x22` | `lds` | Load from shared memory |
@@ -60,13 +65,22 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and t
 - Machine registers: `r0..r31`
 - `r0` is hardwired to zero
 - Registers are per-thread, not per-warp
+- PTX `%r<N>` and `%f<N>` namespaces both lower onto this same 32-bit physical register file
 - Internal special registers:
   - `%tid.x`
+  - `%tid.y`
+  - `%tid.z`
   - `%laneid`
   - `%warpid`
   - `%ntid.x`
+  - `%ntid.y`
+  - `%ntid.z`
   - `%ctaid.x`
+  - `%ctaid.y`
+  - `%ctaid.z`
   - `%nctaid.x`
+  - `%nctaid.y`
+  - `%nctaid.z`
   - `%nwarpid`
   - `%smid`
   - `%nsmid`
@@ -75,3 +89,9 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and t
   - `%argbase`
 
 `%gridid` is exposed publicly only through a narrow `.u64` PTX path and lowers to the internal `%gridid.lo` / `%gridid.hi` pair. `%argbase` is an internal lowering helper used by the PTX compiler to service `.param` loads and is not part of the public PTX subset surface.
+
+## Execution Notes
+
+- `fadd`, `fmul`, and `ffma` execute on the CUDA-core datapath. `ffma` is the only current user of the `RRRR` format.
+- `ldg` and `stg` are typeless 32-bit machine-memory ops. PTX `.u32`, `.f32`, and the narrow lowered `%gridid` `.u64` path all reuse them.
+- Instruction fetch remains single-word. Global LSU traffic is burst-capable and coalesces contiguous active-lane 32-bit accesses into multi-beat requests up to `cudaLaneCount` beats.

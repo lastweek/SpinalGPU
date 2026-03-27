@@ -8,6 +8,10 @@ case class SmConfig(
     warpSize: Int = 32,
     schedulerCount: Int = 1,
     cudaLaneCount: Int = 8,
+    cudaIntegerLatency: Int = 1,
+    fpAddLatency: Int = 4,
+    fpMulLatency: Int = 4,
+    fpFmaLatency: Int = 5,
     lsuCount: Int = 1,
     sfuCount: Int = 1,
     tensorCoreCount: Int = 1,
@@ -23,6 +27,11 @@ case class SmConfig(
   require(warpSize > 0 && warpSize % 8 == 0, "warpSize must be a positive multiple of 8")
   require(schedulerCount > 0, "schedulerCount must be positive")
   require(cudaLaneCount > 0, "cudaLaneCount must be positive")
+  require(warpSize % cudaLaneCount == 0, "warpSize must be an integer multiple of cudaLaneCount")
+  require(cudaIntegerLatency > 0, "cudaIntegerLatency must be positive")
+  require(fpAddLatency > 0, "fpAddLatency must be positive")
+  require(fpMulLatency > 0, "fpMulLatency must be positive")
+  require(fpFmaLatency > 0, "fpFmaLatency must be positive")
   require(lsuCount > 0, "lsuCount must be positive")
   require(sfuCount > 0, "sfuCount must be positive")
   require(tensorCoreCount > 0, "tensorCoreCount must be positive")
@@ -46,6 +55,7 @@ case class SmConfig(
   val sharedBankIndexWidth: Int = log2Up(sharedMemoryBankCount max 2)
   val specialRegisterWidth: Int = 5
   val faultCodeWidth: Int = 8
+  val globalBurstBeatCountWidth: Int = log2Up(cudaLaneCount + 1)
 
   def axiConfig: Axi4Config =
     Axi4Config(

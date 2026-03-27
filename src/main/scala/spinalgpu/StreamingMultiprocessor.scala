@@ -30,6 +30,11 @@ case class StreamingMultiprocessorDebugIo(config: SmConfig) extends Bundle {
   val lsuExternalReqReady = out(Bool())
   val lsuExternalRspValid = out(Bool())
   val lsuExternalRspReady = out(Bool())
+  val launchInvalidGridDim = out(Bool())
+  val launchInvalidBlockDimZero = out(Bool())
+  val launchInvalidBlockThreadCount = out(Bool())
+  val launchInvalidSharedBytes = out(Bool())
+  val launchRequestedBlockThreads = out(UInt((config.threadCountWidth * 3) bits))
 }
 
 case class StreamingMultiprocessorIo(config: SmConfig) extends Bundle {
@@ -63,12 +68,16 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   private val selectedWarpIdReg = Reg(UInt(config.warpIdWidth bits)) init (0)
   private val selectedContextReg = Reg(WarpContext(config))
   private val instructionReg = Reg(Bits(config.instructionWidth bits)) init (0)
+  private val blockThreadCountWidth = config.threadCountWidth * 3
 
   selectedContextReg.valid.init(False)
   selectedContextReg.runnable.init(False)
   selectedContextReg.pc.init(0)
   selectedContextReg.activeMask.init(0)
   selectedContextReg.threadBase.init(0)
+  selectedContextReg.threadBaseX.init(0)
+  selectedContextReg.threadBaseY.init(0)
+  selectedContextReg.threadBaseZ.init(0)
   selectedContextReg.threadCount.init(0)
   selectedContextReg.outstanding.init(False)
   selectedContextReg.exited.init(False)
@@ -119,8 +128,10 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
 
   private val readAddrA = UInt(config.registerAddressWidth bits)
   private val readAddrB = UInt(config.registerAddressWidth bits)
+  private val readAddrC = UInt(config.registerAddressWidth bits)
   readAddrA := U(0, config.registerAddressWidth bits)
   readAddrB := U(0, config.registerAddressWidth bits)
+  readAddrC := U(0, config.registerAddressWidth bits)
 
   when(decodeUnit.io.decoded.usesRs0 || decodeUnit.io.decoded.isStore || decodeUnit.io.decoded.isBranch) {
     readAddrA := decodeUnit.io.decoded.rs0
@@ -130,27 +141,61 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   } elsewhen (decodeUnit.io.decoded.usesRs1) {
     readAddrB := decodeUnit.io.decoded.rs1
   }
+  when(decodeUnit.io.decoded.usesRs2) {
+    readAddrC := decodeUnit.io.decoded.rs2
+  }
 
   registerFile.io.readWarpId := selectedWarpIdReg
   registerFile.io.readAddrA := readAddrA
   registerFile.io.readAddrB := readAddrB
+  registerFile.io.readAddrC := readAddrC
 
   private val immediateUInt = decodeUnit.io.decoded.immediate.asUInt
   private val advancePc = (selectedContextReg.pc + U(4, config.addressWidth bits)).resized
   private val branchTarget = (advancePc + immediateUInt.resized).resized
+  private val currentBlockThreadCount =
+    (smAdmissionController.io.currentCommand.blockDimX.resize(blockThreadCountWidth bits) *
+      smAdmissionController.io.currentCommand.blockDimY.resize(blockThreadCountWidth bits) *
+      smAdmissionController.io.currentCommand.blockDimZ.resize(blockThreadCountWidth bits)).resized
   private val blockWarpCount =
-    ((smAdmissionController.io.currentCommand.blockDimX.resize(config.dataWidth) + U(config.warpSize - 1, config.dataWidth bits)) /
+    ((currentBlockThreadCount.resized.resize(config.dataWidth bits) + U(config.warpSize - 1, config.dataWidth bits)) /
       U(config.warpSize, config.dataWidth bits)).resized
   private val gridIdLow = smAdmissionController.io.currentGridId(31 downto 0).resize(config.dataWidth)
   private val gridIdHigh = smAdmissionController.io.currentGridId(63 downto 32).resize(config.dataWidth)
 
+  private val laneTidX = Vec(UInt(config.threadCountWidth bits), config.warpSize)
+  private val laneTidY = Vec(UInt(config.threadCountWidth bits), config.warpSize)
+  private val laneTidZ = Vec(UInt(config.threadCountWidth bits), config.warpSize)
+  laneTidX(0) := selectedContextReg.threadBaseX
+  laneTidY(0) := selectedContextReg.threadBaseY
+  laneTidZ(0) := selectedContextReg.threadBaseZ
+  for (lane <- 1 until config.warpSize) {
+    val (nextX, nextY, nextZ) = ThreadCoordinateLogic.increment(
+      config,
+      laneTidX(lane - 1),
+      laneTidY(lane - 1),
+      laneTidZ(lane - 1),
+      smAdmissionController.io.currentCommand.blockDimX,
+      smAdmissionController.io.currentCommand.blockDimY,
+      smAdmissionController.io.currentCommand.blockDimZ
+    )
+    laneTidX(lane) := nextX
+    laneTidY(lane) := nextY
+    laneTidZ(lane) := nextZ
+  }
+
   private val specialValues = Vec(UInt(config.dataWidth bits), config.warpSize)
   for (lane <- 0 until config.warpSize) {
-    val threadId = (selectedContextReg.threadBase.resize(config.dataWidth) + U(lane, config.dataWidth bits)).resized
     specialValues(lane) := U(0, config.dataWidth bits)
     switch(decodeUnit.io.decoded.specialRegister) {
       is(U(SpecialRegisterKind.TidX, config.specialRegisterWidth bits)) {
-        specialValues(lane) := threadId
+        specialValues(lane) := laneTidX(lane).resize(config.dataWidth)
+      }
+      is(U(SpecialRegisterKind.TidY, config.specialRegisterWidth bits)) {
+        specialValues(lane) := laneTidY(lane).resize(config.dataWidth)
+      }
+      is(U(SpecialRegisterKind.TidZ, config.specialRegisterWidth bits)) {
+        specialValues(lane) := laneTidZ(lane).resize(config.dataWidth)
       }
       is(U(SpecialRegisterKind.LaneId, config.specialRegisterWidth bits)) {
         specialValues(lane) := U(lane, config.dataWidth bits)
@@ -161,10 +206,28 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
       is(U(SpecialRegisterKind.NtidX, config.specialRegisterWidth bits)) {
         specialValues(lane) := smAdmissionController.io.currentCommand.blockDimX.resize(config.dataWidth)
       }
+      is(U(SpecialRegisterKind.NtidY, config.specialRegisterWidth bits)) {
+        specialValues(lane) := smAdmissionController.io.currentCommand.blockDimY.resize(config.dataWidth)
+      }
+      is(U(SpecialRegisterKind.NtidZ, config.specialRegisterWidth bits)) {
+        specialValues(lane) := smAdmissionController.io.currentCommand.blockDimZ.resize(config.dataWidth)
+      }
       is(U(SpecialRegisterKind.CtaidX, config.specialRegisterWidth bits)) {
         specialValues(lane) := U(0, config.dataWidth bits)
       }
+      is(U(SpecialRegisterKind.CtaidY, config.specialRegisterWidth bits)) {
+        specialValues(lane) := U(0, config.dataWidth bits)
+      }
+      is(U(SpecialRegisterKind.CtaidZ, config.specialRegisterWidth bits)) {
+        specialValues(lane) := U(0, config.dataWidth bits)
+      }
       is(U(SpecialRegisterKind.NctaidX, config.specialRegisterWidth bits)) {
+        specialValues(lane) := 1
+      }
+      is(U(SpecialRegisterKind.NctaidY, config.specialRegisterWidth bits)) {
+        specialValues(lane) := 1
+      }
+      is(U(SpecialRegisterKind.NctaidZ, config.specialRegisterWidth bits)) {
         specialValues(lane) := 1
       }
       is(U(SpecialRegisterKind.NwarpId, config.specialRegisterWidth bits)) {
@@ -198,10 +261,11 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   cudaCoreArray.io.issue.payload.opcode := decodeUnit.io.decoded.opcode
   cudaCoreArray.io.issue.payload.activeMask := selectedContextReg.activeMask
   for (lane <- 0 until config.warpSize) {
-    cudaCoreArray.io.issue.payload.operandA(lane) := registerFile.io.readDataA(lane)
-    cudaCoreArray.io.issue.payload.operandB(lane) := registerFile.io.readDataB(lane)
+    cudaCoreArray.io.issue.payload.operandA(lane) := registerFile.io.readDataA(lane).asBits
+    cudaCoreArray.io.issue.payload.operandB(lane) := registerFile.io.readDataB(lane).asBits
+    cudaCoreArray.io.issue.payload.operandC(lane) := registerFile.io.readDataC(lane).asBits
     when(decodeUnit.io.decoded.opcode === B(Opcode.MOVI, 8 bits) || decodeUnit.io.decoded.opcode === B(Opcode.ADDI, 8 bits)) {
-      cudaCoreArray.io.issue.payload.operandB(lane) := immediateUInt.resized
+      cudaCoreArray.io.issue.payload.operandB(lane) := immediateUInt.resized.asBits
     }
   }
   cudaCoreArray.io.response.ready := engineState === EngineState.WAIT_CUDA
@@ -262,6 +326,11 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   io.debug.lsuExternalReqReady := loadStoreUnit.io.externalMemReq.ready
   io.debug.lsuExternalRspValid := loadStoreUnit.io.externalMemRsp.valid
   io.debug.lsuExternalRspReady := loadStoreUnit.io.externalMemRsp.ready
+  io.debug.launchInvalidGridDim := smAdmissionController.io.invalidGridDim
+  io.debug.launchInvalidBlockDimZero := smAdmissionController.io.invalidBlockDimZero
+  io.debug.launchInvalidBlockThreadCount := smAdmissionController.io.invalidBlockThreadCount
+  io.debug.launchInvalidSharedBytes := smAdmissionController.io.invalidSharedBytes
+  io.debug.launchRequestedBlockThreads := smAdmissionController.io.requestedBlockThreadCount
 
   private val branchTrueBits = Bits(config.warpSize bits)
   private val branchFalseBits = Bits(config.warpSize bits)
@@ -291,6 +360,9 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
     updateWriteContext.pc := warpScheduler.io.schedule.payload.context.pc
     updateWriteContext.activeMask := warpScheduler.io.schedule.payload.context.activeMask
     updateWriteContext.threadBase := warpScheduler.io.schedule.payload.context.threadBase
+    updateWriteContext.threadBaseX := warpScheduler.io.schedule.payload.context.threadBaseX
+    updateWriteContext.threadBaseY := warpScheduler.io.schedule.payload.context.threadBaseY
+    updateWriteContext.threadBaseZ := warpScheduler.io.schedule.payload.context.threadBaseZ
     updateWriteContext.threadCount := warpScheduler.io.schedule.payload.context.threadCount
     updateWriteContext.outstanding := True
     updateWriteContext.exited := warpScheduler.io.schedule.payload.context.exited

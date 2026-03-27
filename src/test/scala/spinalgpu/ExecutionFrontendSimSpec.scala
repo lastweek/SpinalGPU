@@ -12,10 +12,46 @@ import spinalgpu.toolchain.KernelCorpus
 class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
   private val config = SmConfig.default
 
+  private def runGpuTopKernelCaseWithoutHarnessGate(kernel: KernelCorpus.KernelCase): Unit = {
+    SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
+      dut.coreClockDomain.forkStimulus(period = 10)
+      dut.coreClockDomain.assertReset()
+      dut.coreClockDomain.waitSampling()
+      dut.coreClockDomain.deassertReset()
+
+      val memory = AxiMemorySim(dut.io.memory, dut.coreClockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
+      val hostControl = AxiLite4Driver(dut.io.hostControl, dut.coreClockDomain)
+      memory.start()
+      hostControl.reset()
+
+      KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
+      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
+      ExecutionTestUtils.waitForExecutionComplete(hostControl, dut.coreClockDomain, timeoutCycles = kernel.timeoutCycles)
+
+      dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
+      kernel.expectation match {
+        case KernelCorpus.KernelExpectation.Success(checks) =>
+          checks.foreach(KernelCorpusTestUtils.assertSuccessCheck(memory, _, config.byteCount))
+        case other =>
+          fail(s"expected success expectation for explicit GpuTop run, got $other")
+      }
+
+      memory.stop()
+    }
+  }
+
   KernelCorpus.gpuTopCases.foreach { kernel =>
     ignore(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
       KernelCorpusTestUtils.runGpuTopKernelCase(kernel, config)
     }
+  }
+
+  test("matrix_add_f32 executes through GpuTop") {
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixAddF32, config)
+  }
+
+  test("matrix_mul_f32 executes through GpuTop") {
+    runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.matrixMulF32)
   }
 
   test("grid_id_store increments across successive GpuTop command submissions") {

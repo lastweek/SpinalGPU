@@ -14,6 +14,7 @@ import spinalgpu.toolchain.KernelCorpus
 object ExecutionTestUtils {
   def u32(value: Int): BigInt = BigInt(value.toLong & 0xFFFFFFFFL)
   def u32(value: Long): BigInt = BigInt(value & 0xFFFFFFFFL)
+  def f32Bits(value: Float): Long = java.lang.Float.floatToRawIntBits(value).toLong & 0xFFFFFFFFL
 
   def writeWord(memory: AxiMemorySim, address: Long, value: BigInt, byteCount: Int): Unit = {
     memory.memory.writeBigInt(address, value, byteCount)
@@ -62,6 +63,12 @@ object ExecutionTestUtils {
     }
   }
 
+  def writeDataF32(memory: AxiMemorySim, base: Long, values: Seq[Float], byteCount: Int): Unit = {
+    values.zipWithIndex.foreach { case (value, index) =>
+      writeWord(memory, base + (index.toLong * byteCount), u32(f32Bits(value)), byteCount)
+    }
+  }
+
   private def withAxiLiteTimeout[T](clockDomain: ClockDomain, timeoutCycles: Int, label: String)(body: => T): T = {
     var result: Option[T] = None
     var failure: Option[Throwable] = None
@@ -104,7 +111,11 @@ object ExecutionTestUtils {
   def submitKernelCommand(driver: AxiLite4Driver, clockDomain: ClockDomain, command: KernelCorpus.KernelCommand): Unit = {
     writeRegister(driver, clockDomain, ControlRegisters.EntryPc, BigInt(command.entryPc))
     writeRegister(driver, clockDomain, ControlRegisters.GridDimX, BigInt(command.gridDimX))
+    writeRegister(driver, clockDomain, ControlRegisters.GridDimY, BigInt(command.gridDimY))
+    writeRegister(driver, clockDomain, ControlRegisters.GridDimZ, BigInt(command.gridDimZ))
     writeRegister(driver, clockDomain, ControlRegisters.BlockDimX, BigInt(command.blockDimX))
+    writeRegister(driver, clockDomain, ControlRegisters.BlockDimY, BigInt(command.blockDimY))
+    writeRegister(driver, clockDomain, ControlRegisters.BlockDimZ, BigInt(command.blockDimZ))
     writeRegister(driver, clockDomain, ControlRegisters.ArgBase, BigInt(command.argBase))
     writeRegister(driver, clockDomain, ControlRegisters.SharedBytes, BigInt(command.sharedBytes))
     writeRegister(driver, clockDomain, ControlRegisters.Control, BigInt(1))

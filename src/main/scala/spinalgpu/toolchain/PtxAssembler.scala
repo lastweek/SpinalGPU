@@ -90,6 +90,37 @@ object PtxAssembler {
     }
   }
 
+  private final case class FloatBinaryInstruction(opcode: Int, destination: String, lhs: String, rhs: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      Seq(
+        Isa.encodeRrr(
+          opcode,
+          rd = layout.requireFloatRegister(destination),
+          rs0 = layout.requireFloatRegister(lhs),
+          rs1 = layout.requireFloatRegister(rhs)
+        )
+      )
+    }
+  }
+
+  private final case class FmaInstruction(destination: String, lhs: String, rhs: String, accumulate: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      Seq(
+        Isa.encodeRrrr(
+          Opcode.FFMA,
+          rd = layout.requireFloatRegister(destination),
+          rs0 = layout.requireFloatRegister(lhs),
+          rs1 = layout.requireFloatRegister(rhs),
+          rs2 = layout.requireFloatRegister(accumulate)
+        )
+      )
+    }
+  }
+
   private final case class LoadInstruction(addressSpace: String, destination: String, source: MemoryOperand) extends PtxInstruction {
     override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int =
       addressSpace match {
@@ -159,7 +190,7 @@ object PtxAssembler {
     }
   }
 
-  private final case class SetPredicateInstruction(predicate: String, negateEquality: Boolean, lhs: String, rhs: ValueOperand)
+  private final case class SetPredicateInstruction(compareOpcode: Int, predicate: String, negateResult: Boolean, lhs: String, rhs: ValueOperand)
       extends PtxInstruction {
     override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = {
       val compareCount = rhs match {
@@ -168,28 +199,28 @@ object PtxAssembler {
         case ImmediateOperand(_) => 2
         case _ => throw new IllegalArgumentException("setp expects a register or immediate rhs")
       }
-      compareCount + (if (negateEquality) 2 else 0)
+      compareCount + (if (negateResult) 2 else 0)
     }
 
     override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
       val rd = layout.requirePredicate(predicate)
-      val rs0 = layout.requireRegister(lhs)
+      val rs0 = layout.requireIntegerRegister(lhs)
       val compareWords =
         rhs match {
           case RegisterOperand(name) =>
-            Seq(Isa.encodeRrr(Opcode.SETEQ, rd = rd, rs0 = rs0, rs1 = layout.requireRegister(name)))
+            Seq(Isa.encodeRrr(compareOpcode, rd = rd, rs0 = rs0, rs1 = layout.requireIntegerRegister(name)))
           case ImmediateOperand(0) =>
-            Seq(Isa.encodeRrr(Opcode.SETEQ, rd = rd, rs0 = rs0, rs1 = 0))
+            Seq(Isa.encodeRrr(compareOpcode, rd = rd, rs0 = rs0, rs1 = 0))
           case ImmediateOperand(value) =>
             Seq(
               Isa.encodeRri(Opcode.MOVI, rd = layout.scratchRegister, rs0 = 0, immediate = value),
-              Isa.encodeRrr(Opcode.SETEQ, rd = rd, rs0 = rs0, rs1 = layout.scratchRegister)
+              Isa.encodeRrr(compareOpcode, rd = rd, rs0 = rs0, rs1 = layout.scratchRegister)
             )
           case _ =>
             throw new IllegalArgumentException("setp expects a register or immediate rhs")
         }
 
-      if (!negateEquality) {
+      if (!negateResult) {
         compareWords
       } else {
         compareWords ++ Seq(
@@ -247,13 +278,20 @@ object PtxAssembler {
   }
 
   private final case class RegisterLayout(
-      scalarRegisters: Map[String, Int],
+      integerRegisters: Map[String, Int],
+      floatRegisters: Map[String, Int],
       wideRegisters: Map[String, (Int, Int)],
       predicateRegisters: Map[String, Int],
       scratchRegister: Int
   ) {
     def requireRegister(name: String): Int =
-      scalarRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX register: $name"))
+      integerRegisters.get(name).orElse(floatRegisters.get(name)).getOrElse(throw new IllegalArgumentException(s"unknown PTX register: $name"))
+
+    def requireIntegerRegister(name: String): Int =
+      integerRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX integer register: $name"))
+
+    def requireFloatRegister(name: String): Int =
+      floatRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX float register: $name"))
 
     def requireWideRegister(name: String): (Int, Int) =
       wideRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX 64-bit register: $name"))
@@ -267,7 +305,12 @@ object PtxAssembler {
 
   def assemble(source: String): AssembledProgram = {
     val parsed = parseModule(source)
-    val layout = allocateRegisters(parsed.declaredScalarRegisterCount, parsed.declaredWideRegisterCount, parsed.declaredPredicateCount)
+    val layout = allocateRegisters(
+      parsed.declaredIntegerRegisterCount,
+      parsed.declaredFloatRegisterCount,
+      parsed.declaredWideRegisterCount,
+      parsed.declaredPredicateCount
+    )
     val context = ModuleContext(parsed.paramOffsets, parsed.sharedOffsets)
     val labels = assignLabelAddresses(parsed.body, layout, context)
 
@@ -303,7 +346,8 @@ object PtxAssembler {
   }
 
   private final case class ParsedModule(
-      declaredScalarRegisterCount: Int,
+      declaredIntegerRegisterCount: Int,
+      declaredFloatRegisterCount: Int,
       declaredWideRegisterCount: Int,
       declaredPredicateCount: Int,
       paramOffsets: Map[String, Int],
@@ -317,7 +361,8 @@ object PtxAssembler {
     val sharedOffsets = mutable.LinkedHashMap.empty[String, Int]
     val body = mutable.ArrayBuffer.empty[BodyItem]
 
-    var declaredScalarRegisterCount = 0
+    var declaredIntegerRegisterCount = 0
+    var declaredFloatRegisterCount = 0
     var declaredWideRegisterCount = 0
     var declaredPredicateCount = 0
     var nextParamOffset = 0
@@ -447,10 +492,13 @@ object PtxAssembler {
             val statement = cleaned.dropRight(1).trim
             if (statement.startsWith(".reg ")) {
               val RegisterDecl = """\.reg\s+\.u32\s+%r<(\d+)>""".r
+              val FloatRegisterDecl = """\.reg\s+\.f32\s+%f<(\d+)>""".r
               val WideRegisterDecl = """\.reg\s+\.u64\s+%rd<(\d+)>""".r
               statement match {
                 case RegisterDecl(count) =>
-                  declaredScalarRegisterCount += count.toInt
+                  declaredIntegerRegisterCount += count.toInt
+                case FloatRegisterDecl(count) =>
+                  declaredFloatRegisterCount += count.toInt
                 case WideRegisterDecl(count) =>
                   declaredWideRegisterCount += count.toInt
                 case _ =>
@@ -496,7 +544,8 @@ object PtxAssembler {
     require(!inBody, "unterminated .entry body")
 
     ParsedModule(
-      declaredScalarRegisterCount = declaredScalarRegisterCount,
+      declaredIntegerRegisterCount = declaredIntegerRegisterCount,
+      declaredFloatRegisterCount = declaredFloatRegisterCount,
       declaredWideRegisterCount = declaredWideRegisterCount,
       declaredPredicateCount = declaredPredicateCount,
       paramOffsets = params.toMap,
@@ -506,6 +555,18 @@ object PtxAssembler {
   }
 
   private def parseInstruction(statement: String, lineNumber: Int): PtxInstruction = {
+    def parseIntegerRegisterName(token: String): String = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("%r"), s"expected %r register, got: $trimmed")
+      trimmed
+    }
+
+    def parseFloatRegisterName(token: String): String = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("%f"), s"expected %f register, got: $trimmed")
+      trimmed
+    }
+
     def parseScalarOperand(token: String): ValueOperand = {
       val trimmed = token.trim
       if (trimmed.startsWith("%r")) {
@@ -514,6 +575,17 @@ object PtxAssembler {
         SpecialRegisterOperand(trimmed)
       } else {
         ImmediateOperand(parseImmediate(trimmed))
+      }
+    }
+
+    def parseFloatMovOperand(token: String): ValueOperand = {
+      val trimmed = token.trim
+      if (trimmed.startsWith("%f")) {
+        RegisterOperand(trimmed)
+      } else if (trimmed == "0f00000000") {
+        ImmediateOperand(0)
+      } else {
+        throw new IllegalArgumentException(s"PTX line $lineNumber: mov.f32 only supports %f registers and 0f00000000 immediates")
       }
     }
 
@@ -582,36 +654,62 @@ object PtxAssembler {
               case "mov.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 MovInstruction(destination, parseMovOperand(source))
+              case "mov.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                MovInstruction(parseFloatRegisterName(destination), parseFloatMovOperand(source))
               case "mov.u64" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 MoveWideSpecialInstruction(destination, source)
               case "add.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.ADD, Some(Opcode.ADDI), destination, lhs, parseScalarOperand(rhs))
+              case "add.f32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                FloatBinaryInstruction(Opcode.FADD, parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs))
               case "sub.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.SUB, None, destination, lhs, parseScalarOperand(rhs))
               case "mul.lo.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.MULLO, None, destination, lhs, parseScalarOperand(rhs))
+              case "mul.f32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                FloatBinaryInstruction(Opcode.FMUL, parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs))
+              case "fma.rn.f32" =>
+                val Seq(destination, lhs, rhs, accumulate) = parseOperands(rest, 4)
+                FmaInstruction(
+                  parseFloatRegisterName(destination),
+                  parseFloatRegisterName(lhs),
+                  parseFloatRegisterName(rhs),
+                  parseFloatRegisterName(accumulate)
+                )
               case "shl.b32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.SHL, None, destination, lhs, parseScalarOperand(rhs))
               case "setp.eq.u32" =>
                 val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
-                SetPredicateInstruction(predicate, negateEquality = false, lhs = lhs, rhs = parseScalarOperand(rhs))
+                SetPredicateInstruction(Opcode.SETEQ, predicate, negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
               case "setp.ne.u32" =>
                 val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
-                SetPredicateInstruction(predicate, negateEquality = true, lhs = lhs, rhs = parseScalarOperand(rhs))
+                SetPredicateInstruction(Opcode.SETEQ, predicate, negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+              case "setp.lt.u32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLT, predicate, negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
               case "ld.param.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 LoadInstruction("param", destination, parseMemoryOperand(source))
               case "ld.global.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 LoadInstruction("global", destination, parseMemoryOperand(source))
+              case "ld.global.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                LoadInstruction("global", parseFloatRegisterName(destination), parseMemoryOperand(source))
               case "st.global.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreInstruction("global", parseMemoryOperand(destination), source)
+              case "st.global.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                StoreInstruction("global", parseMemoryOperand(destination), parseFloatRegisterName(source))
               case "st.global.u64" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreWideInstruction("global", parseMemoryOperand(destination), source)
@@ -632,23 +730,35 @@ object PtxAssembler {
     }
   }
 
-  private def allocateRegisters(declaredScalarRegisterCount: Int, declaredWideRegisterCount: Int, declaredPredicateCount: Int): RegisterLayout = {
+  private def allocateRegisters(
+      declaredIntegerRegisterCount: Int,
+      declaredFloatRegisterCount: Int,
+      declaredWideRegisterCount: Int,
+      declaredPredicateCount: Int
+  ): RegisterLayout = {
     val usableRegisterCount = Isa.registerCount - 1
-    require(declaredScalarRegisterCount >= 0, "declared PTX scalar register count must be non-negative")
+    require(declaredIntegerRegisterCount >= 0, "declared PTX integer register count must be non-negative")
+    require(declaredFloatRegisterCount >= 0, "declared PTX float register count must be non-negative")
     require(declaredWideRegisterCount >= 0, "declared PTX 64-bit register count must be non-negative")
     require(declaredPredicateCount >= 0, "declared PTX predicate count must be non-negative")
-    val requiredRegisters = declaredScalarRegisterCount + (declaredWideRegisterCount * 2) + declaredPredicateCount + 1
+    val requiredRegisters = declaredIntegerRegisterCount + declaredFloatRegisterCount + (declaredWideRegisterCount * 2) + declaredPredicateCount + 1
     require(
       requiredRegisters <= usableRegisterCount,
-      s"PTX source declares $declaredScalarRegisterCount scalar registers, $declaredWideRegisterCount 64-bit registers, and $declaredPredicateCount predicates, but only $usableRegisterCount hardware registers are available including one scratch register"
+      s"PTX source declares $declaredIntegerRegisterCount integer registers, $declaredFloatRegisterCount float registers, $declaredWideRegisterCount 64-bit registers, and $declaredPredicateCount predicates, but only $usableRegisterCount hardware registers are available including one scratch register"
     )
 
     var nextRegister = 1
-    val scalarRegisters =
-      (0 until declaredScalarRegisterCount).map { index =>
+    val integerRegisters =
+      (0 until declaredIntegerRegisterCount).map { index =>
         val allocated = nextRegister
         nextRegister += 1
         s"%r$index" -> allocated
+      }.toMap
+    val floatRegisters =
+      (0 until declaredFloatRegisterCount).map { index =>
+        val allocated = nextRegister
+        nextRegister += 1
+        s"%f$index" -> allocated
       }.toMap
     val wideRegisters =
       (0 until declaredWideRegisterCount).map { index =>
@@ -663,7 +773,7 @@ object PtxAssembler {
         s"%p$index" -> allocated
       }.toMap
     val scratchRegister = nextRegister
-    RegisterLayout(scalarRegisters, wideRegisters, predicateRegisters, scratchRegister)
+    RegisterLayout(integerRegisters, floatRegisters, wideRegisters, predicateRegisters, scratchRegister)
   }
 
   private def assignLabelAddresses(body: Seq[BodyItem], layout: RegisterLayout, context: ModuleContext): Map[String, Int] = {

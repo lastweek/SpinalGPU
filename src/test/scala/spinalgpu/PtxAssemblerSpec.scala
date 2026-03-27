@@ -124,6 +124,81 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
     )
   }
 
+  test("allocates integer and float PTX registers from one physical pool and lowers FP32 CUDA-core instructions") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry float_ops(
+        |    .param .u32 ptr_param
+        |)
+        |{
+        |    .reg .u32 %r<3>;
+        |    .reg .f32 %f<3>;
+        |
+        |    ld.param.u32 %r0, [ptr_param];
+        |    mov.u32 %r1, %tid.y;
+        |    mov.u32 %r2, %tid.z;
+        |    mov.f32 %f0, 0f00000000;
+        |    ld.global.f32 %f1, [%r0];
+        |    add.f32 %f2, %f0, %f1;
+        |    mul.f32 %f1, %f2, %f1;
+        |    fma.rn.f32 %f2, %f1, %f0, %f2;
+        |    st.global.f32 [%r0], %f2;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 7, specialRegister = SpecialRegisterKind.ArgBase),
+      Isa.encodeMem(Opcode.LDG, reg = 1, base = 7, offset = 0),
+      Isa.encodeSys(Opcode.S2R, rd = 2, specialRegister = SpecialRegisterKind.TidY),
+      Isa.encodeSys(Opcode.S2R, rd = 3, specialRegister = SpecialRegisterKind.TidZ),
+      Isa.encodeRri(Opcode.MOVI, rd = 4, rs0 = 0, immediate = 0),
+      Isa.encodeMem(Opcode.LDG, reg = 5, base = 1, offset = 0),
+      Isa.encodeRrr(Opcode.FADD, rd = 6, rs0 = 4, rs1 = 5),
+      Isa.encodeRrr(Opcode.FMUL, rd = 5, rs0 = 6, rs1 = 5),
+      Isa.encodeRrrr(Opcode.FFMA, rd = 6, rs0 = 5, rs1 = 4, rs2 = 6),
+      Isa.encodeMem(Opcode.STG, reg = 6, base = 1, offset = 0),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("lowers 2D thread-coordinate guards with setp.lt.u32") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry coord_guard(
+        |    .param .u32 rows_param
+        |)
+        |{
+        |    .reg .u32 %r<2>;
+        |    .pred %p<1>;
+        |
+        |    ld.param.u32 %r0, [rows_param];
+        |    mov.u32 %r1, %tid.y;
+        |    setp.lt.u32 %p0, %r1, %r0;
+        |    @!%p0 bra done;
+        |done:
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 4, specialRegister = SpecialRegisterKind.ArgBase),
+      Isa.encodeMem(Opcode.LDG, reg = 1, base = 4, offset = 0),
+      Isa.encodeSys(Opcode.S2R, rd = 2, specialRegister = SpecialRegisterKind.TidY),
+      Isa.encodeRrr(Opcode.SETLT, rd = 3, rs0 = 2, rs1 = 1),
+      Isa.encodeBr(Opcode.BRZ, rs0 = 3, offset = 0),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
   test("lowers shared symbols to byte offsets in shared-memory instructions") {
     val program = PtxAssembler.assemble(
       """.version 8.0
@@ -222,6 +297,23 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
           |    .reg .u64 %rd<1>;
           |
           |    add.u64 %rd0, %rd0, %rd0;
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f32 %f<1>;
+          |
+          |    mov.f32 %f0, 0f3f800000;
           |    ret;
           |}
           |""".stripMargin
