@@ -68,8 +68,8 @@ object KernelCorpus {
     }
   }
 
-  /** Launch descriptor consumed by the host-side harness helpers. */
-  final case class HostLaunch(
+  /** Command descriptor consumed by the host-side harness helpers. */
+  final case class KernelCommand(
       entryPc: Long,
       blockDimX: Int,
       argBase: Long = 0L,
@@ -117,7 +117,7 @@ object KernelCorpus {
       primaryFeature: KernelFeature,
       secondaryFeatures: Seq[KernelFeature] = Seq.empty,
       teachingLevel: KernelLevel,
-      launch: HostLaunch,
+      command: KernelCommand,
       timeoutCycles: Int = 5000,
       preloadOps: Seq[PreloadOp] = Seq.empty,
       expectation: KernelExpectation,
@@ -129,7 +129,7 @@ object KernelCorpus {
     require(timeoutCycles > 0, s"kernel '$name' must have a positive timeout")
     require(harnessTargets.nonEmpty, s"kernel '$name' must target at least one harness")
 
-    val entryPc: Long = launch.entryPc
+    val entryPc: Long = command.entryPc
     val sourcePath: Path = sourceRoot.resolve(relativeSourcePath).normalize()
     val relativeBinaryPath: String = relativeSourcePath.stripSuffix(".ptx") + ".bin"
     val binaryPath: Path = outputRoot.resolve(relativeBinaryPath).normalize()
@@ -150,7 +150,7 @@ object KernelCorpus {
     primaryFeature = Arithmetic,
     secondaryFeatures = Seq(GlobalMemory),
     teachingLevel = Intro,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 1, argBase = 0x200),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, argBase = 0x200),
     preloadOps = Seq(WriteArgBuffer(base = 0x200, values = Seq(0x300L))),
     expectation = Success(checks = Seq(ExpectWords(base = 0x300, values = Seq(18L)))),
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
@@ -163,7 +163,7 @@ object KernelCorpus {
     primaryFeature = SpecialRegisters,
     secondaryFeatures = Seq(GlobalMemory),
     teachingLevel = Intro,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 40, argBase = 0x200),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 40, argBase = 0x200),
     preloadOps = Seq(WriteArgBuffer(base = 0x200, values = Seq(0x400L))),
     expectation = Success(checks = Seq(ExpectWords(base = 0x400, values = (0 until 40).map(_.toLong)))),
     harnessTargets = Seq(StreamingMultiprocessor)
@@ -176,7 +176,7 @@ object KernelCorpus {
     primaryFeature = SpecialRegisters,
     secondaryFeatures = Seq(GlobalMemory),
     teachingLevel = Core,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 40, argBase = 0x240),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 40, argBase = 0x240),
     timeoutCycles = 20000,
     preloadOps = Seq(WriteArgBuffer(base = 0x240, values = Seq(0x500L))),
     expectation = Success(
@@ -201,7 +201,7 @@ object KernelCorpus {
     primaryFeature = SpecialRegisters,
     secondaryFeatures = Seq(GlobalMemory),
     teachingLevel = Core,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 1, argBase = 0x280),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, argBase = 0x280),
     preloadOps = Seq(WriteArgBuffer(base = 0x280, values = Seq(0xA00L))),
     expectation = Success(checks = Seq(ExpectWords(base = 0xA00, values = Seq(0L, 0L)))),
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
@@ -214,7 +214,7 @@ object KernelCorpus {
     primaryFeature = Control,
     secondaryFeatures = Seq(Arithmetic, GlobalMemory),
     teachingLevel = Core,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 1, argBase = 0x200),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, argBase = 0x200),
     preloadOps = Seq(WriteArgBuffer(base = 0x200, values = Seq(0x300L))),
     expectation = Success(checks = Seq(ExpectWords(base = 0x300, values = Seq(0L)))),
     harnessTargets = Seq(StreamingMultiprocessor)
@@ -227,7 +227,7 @@ object KernelCorpus {
     primaryFeature = SharedMemory,
     secondaryFeatures = Seq(SpecialRegisters, GlobalMemory),
     teachingLevel = Core,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 8, argBase = 0x200, sharedBytes = 256),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x200, sharedBytes = 256),
     preloadOps = Seq(WriteArgBuffer(base = 0x200, values = Seq(0x400L))),
     expectation = Success(checks = Seq(ExpectWords(base = 0x400, values = (0 until 8).map(_.toLong)))),
     harnessTargets = Seq(StreamingMultiprocessor)
@@ -240,7 +240,7 @@ object KernelCorpus {
     primaryFeature = GlobalMemory,
     secondaryFeatures = Seq(Arithmetic, SpecialRegisters),
     teachingLevel = Core,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 8, argBase = 0x240),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x240),
     timeoutCycles = 10000,
     preloadOps = Seq(
       WriteDataWords(base = 0x500, values = (0 until 8).map(_.toLong)),
@@ -260,7 +260,7 @@ object KernelCorpus {
     primaryFeature = Arithmetic,
     secondaryFeatures = Seq(GlobalMemory),
     teachingLevel = Core,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 1, argBase = 0x2C0),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, argBase = 0x2C0),
     timeoutCycles = 10000,
     preloadOps = Seq(WriteArgBuffer(base = 0x2C0, values = Seq(0x800L))),
     expectation = Success(checks = Seq(ExpectWords(base = 0x800, values = (100L to 128L) :+ 0x800L))),
@@ -274,7 +274,7 @@ object KernelCorpus {
     primaryFeature = Control,
     secondaryFeatures = Seq(SpecialRegisters),
     teachingLevel = KernelLevel.Fault,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 8),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8),
     expectation = KernelExpectation.Fault(FaultCode.NonUniformBranch),
     harnessTargets = Seq(StreamingMultiprocessor)
   )
@@ -285,7 +285,7 @@ object KernelCorpus {
     purpose = "Store to a misaligned global address to provoke a load/store fault.",
     primaryFeature = GlobalMemory,
     teachingLevel = KernelLevel.Fault,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 1, argBase = 0x280),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, argBase = 0x280),
     preloadOps = Seq(WriteArgBuffer(base = 0x280, values = Seq(0x300L))),
     expectation = KernelExpectation.Fault(FaultCode.MisalignedLoadStore),
     harnessTargets = Seq(StreamingMultiprocessor)
@@ -297,7 +297,7 @@ object KernelCorpus {
     purpose = "Raise an explicit trap.",
     primaryFeature = Control,
     teachingLevel = KernelLevel.Fault,
-    launch = HostLaunch(entryPc = 0x100, blockDimX = 1),
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1),
     expectation = KernelExpectation.Fault(FaultCode.Trap),
     harnessTargets = Seq(StreamingMultiprocessor)
   )

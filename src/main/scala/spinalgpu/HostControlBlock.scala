@@ -4,13 +4,13 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axilite._
 
-class KernelControlBlock(config: SmConfig) extends Component {
+class HostControlBlock(config: SmConfig) extends Component {
   val io = new Bundle {
     val axi = slave(AxiLite4(config.axiLiteConfig))
-    val launch = out(KernelLaunchDesc(config))
+    val command = out(KernelCommandDesc(config))
     val start = out Bool()
     val clearDone = out Bool()
-    val status = in(LaunchStatus(config))
+    val executionStatus = in(KernelExecutionStatus(config))
   }
 
   private val entryPcReg = Reg(UInt(config.addressWidth bits)) init (0)
@@ -33,11 +33,11 @@ class KernelControlBlock(config: SmConfig) extends Component {
   io.start := False
   io.clearDone := False
 
-  io.launch.entryPc := entryPcReg
-  io.launch.gridDimX := gridDimXReg
-  io.launch.blockDimX := blockDimXReg
-  io.launch.argBase := argBaseReg
-  io.launch.sharedBytes := sharedBytesReg
+  io.command.entryPc := entryPcReg
+  io.command.gridDimX := gridDimXReg
+  io.command.blockDimX := blockDimXReg
+  io.command.argBase := argBaseReg
+  io.command.sharedBytes := sharedBytesReg
 
   io.axi.aw.ready := !writeAddrValid && !writeRspValid
   io.axi.w.ready := !writeDataValid && !writeRspValid
@@ -120,9 +120,9 @@ class KernelControlBlock(config: SmConfig) extends Component {
       }
       is(U(ControlRegisters.Status >> 2, config.controlAddressWidth - 2 bits)) {
         readDataReg := B(0, config.dataWidth bits)
-        readDataReg(0) := io.status.busy
-        readDataReg(1) := io.status.done
-        readDataReg(2) := io.status.fault
+        readDataReg(0) := io.executionStatus.busy
+        readDataReg(1) := io.executionStatus.done
+        readDataReg(2) := io.executionStatus.fault
       }
       is(U(ControlRegisters.EntryPc >> 2, config.controlAddressWidth - 2 bits)) {
         readDataReg := entryPcReg.asBits
@@ -140,10 +140,10 @@ class KernelControlBlock(config: SmConfig) extends Component {
         readDataReg := sharedBytesReg.resize(config.dataWidth).asBits
       }
       is(U(ControlRegisters.FaultPc >> 2, config.controlAddressWidth - 2 bits)) {
-        readDataReg := io.status.faultPc.asBits
+        readDataReg := io.executionStatus.faultPc.asBits
       }
       is(U(ControlRegisters.FaultCode >> 2, config.controlAddressWidth - 2 bits)) {
-        readDataReg := io.status.faultCode.resize(config.dataWidth).asBits
+        readDataReg := io.executionStatus.faultCode.resize(config.dataWidth).asBits
       }
       default {
         readRespReg := B"2'b11"

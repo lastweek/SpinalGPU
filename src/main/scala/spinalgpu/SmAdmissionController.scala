@@ -3,13 +3,13 @@ package spinalgpu
 import spinal.core._
 import spinal.lib._
 
-class LaunchController(config: SmConfig) extends Component {
+class SmAdmissionController(config: SmConfig) extends Component {
   private object State extends SpinalEnum {
     val IDLE, CLEAR_SHARED, INIT_WARPS, RUNNING = newElement()
   }
 
   val io = new Bundle {
-    val launch = in(KernelLaunchDesc(config))
+    val command = in(KernelCommandDesc(config))
     val start = in Bool()
     val clearDone = in Bool()
     val sharedClearBusy = in Bool()
@@ -18,14 +18,14 @@ class LaunchController(config: SmConfig) extends Component {
     val registerFileClear = master(Flow(UInt(config.warpIdWidth bits)))
     val kernelComplete = in Bool()
     val trapInfo = slave(Flow(TrapInfo(config)))
-    val currentLaunch = out(KernelLaunchDesc(config))
+    val currentCommand = out(KernelCommandDesc(config))
     val currentGridId = out(UInt(64 bits))
-    val status = out(LaunchStatus(config))
+    val executionStatus = out(KernelExecutionStatus(config))
   }
 
   private val state = RegInit(State.IDLE)
-  private val status = Reg(LaunchStatus(config))
-  private val currentLaunch = Reg(KernelLaunchDesc(config))
+  private val executionStatus = Reg(KernelExecutionStatus(config))
+  private val currentCommand = Reg(KernelCommandDesc(config))
   private val initIndex = Reg(UInt(config.warpIdWidth bits)) init (0)
   private val clearIssued = RegInit(False)
   private val trapPendingValid = RegInit(False)
@@ -34,17 +34,17 @@ class LaunchController(config: SmConfig) extends Component {
   private val currentGridId = Reg(UInt(64 bits)) init (0)
   private val nextGridId = Reg(UInt(64 bits)) init (0)
 
-  status.busy.init(False)
-  status.done.init(False)
-  status.fault.init(False)
-  status.faultPc.init(0)
-  status.faultCode.init(FaultCode.None)
+  executionStatus.busy.init(False)
+  executionStatus.done.init(False)
+  executionStatus.fault.init(False)
+  executionStatus.faultPc.init(0)
+  executionStatus.faultCode.init(FaultCode.None)
 
-  currentLaunch.entryPc.init(0)
-  currentLaunch.gridDimX.init(0)
-  currentLaunch.blockDimX.init(0)
-  currentLaunch.argBase.init(0)
-  currentLaunch.sharedBytes.init(0)
+  currentCommand.entryPc.init(0)
+  currentCommand.gridDimX.init(0)
+  currentCommand.blockDimX.init(0)
+  currentCommand.argBase.init(0)
+  currentCommand.sharedBytes.init(0)
 
   io.sharedClearStart := False
   io.warpInitWrite.valid := False
@@ -60,9 +60,9 @@ class LaunchController(config: SmConfig) extends Component {
   io.warpInitWrite.payload.context.faulted := False
   io.registerFileClear.valid := False
   io.registerFileClear.payload := initIndex
-  io.currentLaunch := currentLaunch
+  io.currentCommand := currentCommand
   io.currentGridId := currentGridId
-  io.status := status
+  io.executionStatus := executionStatus
 
   private def laneMask(activeCount: UInt): Bits = {
     val mask = Bits(config.warpSize bits)
@@ -72,11 +72,11 @@ class LaunchController(config: SmConfig) extends Component {
     mask
   }
 
-  when(io.clearDone && !status.busy) {
-    status.done := False
-    status.fault := False
-    status.faultPc := U(0, config.addressWidth bits)
-    status.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
+  when(io.clearDone && !executionStatus.busy) {
+    executionStatus.done := False
+    executionStatus.fault := False
+    executionStatus.faultPc := U(0, config.addressWidth bits)
+    executionStatus.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
     trapPendingValid := False
   }
 
@@ -86,23 +86,23 @@ class LaunchController(config: SmConfig) extends Component {
     trapPendingCode := io.trapInfo.faultCode
   }
 
-  when(io.start && !status.busy && state === State.IDLE) {
-    currentLaunch := io.launch
-    status.done := False
-    status.fault := False
-    status.faultPc := U(0, config.addressWidth bits)
-    status.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
+  when(io.start && !executionStatus.busy && state === State.IDLE) {
+    currentCommand := io.command
+    executionStatus.done := False
+    executionStatus.fault := False
+    executionStatus.faultPc := U(0, config.addressWidth bits)
+    executionStatus.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
     trapPendingValid := False
 
-    when(io.launch.gridDimX =/= 1 || io.launch.blockDimX === 0 || io.launch.blockDimX > config.maxBlockThreads || io.launch.sharedBytes > config.sharedMemoryBytes) {
-      status.done := True
-      status.fault := True
-      status.faultPc := io.launch.entryPc
-      status.faultCode := FaultCode.InvalidLaunch
+    when(io.command.gridDimX =/= 1 || io.command.blockDimX === 0 || io.command.blockDimX > config.maxBlockThreads || io.command.sharedBytes > config.sharedMemoryBytes) {
+      executionStatus.done := True
+      executionStatus.fault := True
+      executionStatus.faultPc := io.command.entryPc
+      executionStatus.faultCode := FaultCode.InvalidLaunch
     } otherwise {
       currentGridId := nextGridId
       nextGridId := nextGridId + 1
-      status.busy := True
+      executionStatus.busy := True
       initIndex := U(0, config.warpIdWidth bits)
       clearIssued := False
       state := State.CLEAR_SHARED
@@ -124,8 +124,8 @@ class LaunchController(config: SmConfig) extends Component {
     is(State.INIT_WARPS) {
       val baseThread = (initIndex.resize(config.threadCountWidth bits) * U(config.warpSize, config.threadCountWidth bits)).resized
       val remaining = UInt(config.threadCountWidth bits)
-      when(currentLaunch.blockDimX > baseThread) {
-        remaining := currentLaunch.blockDimX - baseThread
+      when(currentCommand.blockDimX > baseThread) {
+        remaining := currentCommand.blockDimX - baseThread
       } otherwise {
         remaining := U(0, config.threadCountWidth bits)
       }
@@ -140,7 +140,7 @@ class LaunchController(config: SmConfig) extends Component {
       io.warpInitWrite.payload.index := initIndex
       io.warpInitWrite.payload.context.valid := laneCount =/= 0
       io.warpInitWrite.payload.context.runnable := laneCount =/= 0
-      io.warpInitWrite.payload.context.pc := currentLaunch.entryPc
+      io.warpInitWrite.payload.context.pc := currentCommand.entryPc
       io.warpInitWrite.payload.context.activeMask := laneMask(laneCount)
       io.warpInitWrite.payload.context.threadBase := baseThread
       io.warpInitWrite.payload.context.threadCount := laneCount
@@ -160,19 +160,19 @@ class LaunchController(config: SmConfig) extends Component {
 
     is(State.RUNNING) {
       when(trapPendingValid) {
-        status.busy := False
-        status.done := True
-        status.fault := True
-        status.faultPc := trapPendingPc
-        status.faultCode := trapPendingCode
+        executionStatus.busy := False
+        executionStatus.done := True
+        executionStatus.fault := True
+        executionStatus.faultPc := trapPendingPc
+        executionStatus.faultCode := trapPendingCode
         trapPendingValid := False
         state := State.IDLE
       } elsewhen (io.kernelComplete) {
-        status.busy := False
-        status.done := True
-        status.fault := False
-        status.faultPc := U(0, config.addressWidth bits)
-        status.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
+        executionStatus.busy := False
+        executionStatus.done := True
+        executionStatus.fault := False
+        executionStatus.faultPc := U(0, config.addressWidth bits)
+        executionStatus.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
         state := State.IDLE
       }
     }

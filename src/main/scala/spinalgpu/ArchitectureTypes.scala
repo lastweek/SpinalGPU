@@ -11,7 +11,7 @@ object AddressSpaceKind extends SpinalEnum {
   val SHARED, GLOBAL = newElement()
 }
 
-case class KernelLaunchDesc(config: SmConfig) extends Bundle {
+case class KernelCommandDesc(config: SmConfig) extends Bundle {
   val entryPc = UInt(config.addressWidth bits)
   val gridDimX = UInt(config.dataWidth bits)
   val blockDimX = UInt(config.threadCountWidth bits)
@@ -181,7 +181,7 @@ case class ExternalMemRsp(config: SmConfig) extends Bundle {
   val readData = Bits(config.dataWidth bits)
 }
 
-case class LaunchStatus(config: SmConfig) extends Bundle {
+case class KernelExecutionStatus(config: SmConfig) extends Bundle {
   val busy = Bool()
   val done = Bool()
   val fault = Bool()

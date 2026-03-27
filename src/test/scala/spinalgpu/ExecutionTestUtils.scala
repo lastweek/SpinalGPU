@@ -101,12 +101,12 @@ object ExecutionTestUtils {
     }
   }
 
-  def launchKernel(driver: AxiLite4Driver, clockDomain: ClockDomain, launch: KernelCorpus.HostLaunch): Unit = {
-    writeRegister(driver, clockDomain, ControlRegisters.EntryPc, BigInt(launch.entryPc))
-    writeRegister(driver, clockDomain, ControlRegisters.GridDimX, BigInt(launch.gridDimX))
-    writeRegister(driver, clockDomain, ControlRegisters.BlockDimX, BigInt(launch.blockDimX))
-    writeRegister(driver, clockDomain, ControlRegisters.ArgBase, BigInt(launch.argBase))
-    writeRegister(driver, clockDomain, ControlRegisters.SharedBytes, BigInt(launch.sharedBytes))
+  def submitKernelCommand(driver: AxiLite4Driver, clockDomain: ClockDomain, command: KernelCorpus.KernelCommand): Unit = {
+    writeRegister(driver, clockDomain, ControlRegisters.EntryPc, BigInt(command.entryPc))
+    writeRegister(driver, clockDomain, ControlRegisters.GridDimX, BigInt(command.gridDimX))
+    writeRegister(driver, clockDomain, ControlRegisters.BlockDimX, BigInt(command.blockDimX))
+    writeRegister(driver, clockDomain, ControlRegisters.ArgBase, BigInt(command.argBase))
+    writeRegister(driver, clockDomain, ControlRegisters.SharedBytes, BigInt(command.sharedBytes))
     writeRegister(driver, clockDomain, ControlRegisters.Control, BigInt(1))
   }
 
@@ -114,7 +114,7 @@ object ExecutionTestUtils {
     writeRegister(driver, clockDomain, ControlRegisters.Control, BigInt(2))
   }
 
-  def readStatus(driver: AxiLite4Driver, clockDomain: ClockDomain): BigInt = {
+  def readExecutionStatus(driver: AxiLite4Driver, clockDomain: ClockDomain): BigInt = {
     readRegister(driver, clockDomain, ControlRegisters.Status)
   }
 
@@ -126,19 +126,19 @@ object ExecutionTestUtils {
     readRegister(driver, clockDomain, ControlRegisters.FaultPc)
   }
 
-  def waitForDone(
+  def waitForExecutionComplete(
       driver: AxiLite4Driver,
       clockDomain: ClockDomain,
       timeoutCycles: Int = 20000,
       pollIntervalCycles: Int = 8
   ): BigInt = {
     clockDomain.waitSampling()
-    var status = readStatus(driver, clockDomain)
+    var status = readExecutionStatus(driver, clockDomain)
     var cycles = 0
     while (((status >> 1) & 1) == 0 && cycles < timeoutCycles) {
       clockDomain.waitSampling(pollIntervalCycles)
       cycles += pollIntervalCycles
-      status = readStatus(driver, clockDomain)
+      status = readExecutionStatus(driver, clockDomain)
     }
 
     assert(

@@ -18,23 +18,23 @@ class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
     }
   }
 
-  test("grid_id_store increments across successive GpuTop launches") {
+  test("grid_id_store increments across successive GpuTop command submissions") {
     val kernel = KernelCorpus.gridIdStore
 
     SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
-      def waitForDoneSignal(timeoutCycles: Int): Unit = {
+      def waitForExecutionCompleteSignal(timeoutCycles: Int): Unit = {
         var cycles = 0
-        while (!dut.io.debugStatus.done.toBoolean && cycles < timeoutCycles) {
+        while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < timeoutCycles) {
           dut.coreClockDomain.waitSampling()
           cycles += 1
         }
 
         assert(
-          dut.io.debugStatus.done.toBoolean,
+          dut.io.debugExecutionStatus.done.toBoolean,
           s"${kernel.name} did not complete after $timeoutCycles cycles; " +
-            s"busy=${dut.io.debugStatus.busy.toBoolean} fault=${dut.io.debugStatus.fault.toBoolean} " +
-            s"faultCode=${dut.io.debugStatus.faultCode.toBigInt} " +
-            s"faultPc=0x${dut.io.debugStatus.faultPc.toBigInt.toString(16)}"
+            s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
+            s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
+            s"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
         )
       }
 
@@ -44,24 +44,24 @@ class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
       dut.coreClockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.coreClockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
-      val control = AxiLite4Driver(dut.io.control, dut.coreClockDomain)
+      val hostControl = AxiLite4Driver(dut.io.hostControl, dut.coreClockDomain)
       memory.start()
-      control.reset()
+      hostControl.reset()
 
       KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
 
-      ExecutionTestUtils.launchKernel(control, dut.coreClockDomain, kernel.launch)
-      waitForDoneSignal(kernel.timeoutCycles)
-      dut.io.debugStatus.fault.toBoolean shouldBe false
+      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
+      waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(0)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
 
-      ExecutionTestUtils.clearDone(control, dut.coreClockDomain)
+      ExecutionTestUtils.clearDone(hostControl, dut.coreClockDomain)
       dut.coreClockDomain.waitSampling(4)
 
-      ExecutionTestUtils.launchKernel(control, dut.coreClockDomain, kernel.launch)
-      waitForDoneSignal(kernel.timeoutCycles)
-      dut.io.debugStatus.fault.toBoolean shouldBe false
+      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
+      waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(1)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
 

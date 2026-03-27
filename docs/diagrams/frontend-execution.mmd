@@ -2,8 +2,8 @@ flowchart LR
   HOST[Host Test Harness]
   CSR[AXI-Lite Control]
   GPU[GpuTop]
-  KCB[KernelControlBlock]
-  LC[LaunchController]
+  HCB[HostControlBlock]
+  SAC[SmAdmissionController]
   WST[WarpStateTable]
   SCH[WarpScheduler]
   IFU[InstructionFetchUnit]
@@ -13,7 +13,7 @@ flowchart LR
   MEM[Unified External Memory]
 
   HOST --> CSR --> GPU
-  GPU --> KCB --> LC --> WST
+  GPU --> HCB --> SAC --> WST
   WST --> SCH --> IFU --> DEC --> RF --> EXEC
   IFU --> MEM
   EXEC --> MEM

@@ -7,8 +7,8 @@ import spinal.lib.bus.amba4.axilite._
 
 case class GpuTopIo(config: SmConfig) extends Bundle {
   val memory = master(Axi4(config.axiConfig))
-  val control = slave(AxiLite4(config.axiLiteConfig))
-  val debugStatus = out(LaunchStatus(config))
+  val hostControl = slave(AxiLite4(config.axiLiteConfig))
+  val debugExecutionStatus = out(KernelExecutionStatus(config))
 }
 
 class GpuTop(val config: SmConfig = SmConfig.default) extends Component {
@@ -24,15 +24,15 @@ class GpuTop(val config: SmConfig = SmConfig.default) extends Component {
   )
 
   val core = new ClockingArea(coreClockDomain) {
-    val controlBlock = new KernelControlBlock(config)
+    val hostControlBlock = new HostControlBlock(config)
     val streamingMultiprocessor = new StreamingMultiprocessor(config)
 
-    controlBlock.io.axi <> io.control
-    streamingMultiprocessor.io.control.launch := controlBlock.io.launch
-    streamingMultiprocessor.io.control.start := controlBlock.io.start
-    streamingMultiprocessor.io.control.clearDone := controlBlock.io.clearDone
-    controlBlock.io.status := streamingMultiprocessor.io.control.status
-    io.debugStatus := streamingMultiprocessor.io.control.status
+    hostControlBlock.io.axi <> io.hostControl
+    streamingMultiprocessor.io.command.command := hostControlBlock.io.command
+    streamingMultiprocessor.io.command.start := hostControlBlock.io.start
+    streamingMultiprocessor.io.command.clearDone := hostControlBlock.io.clearDone
+    hostControlBlock.io.executionStatus := streamingMultiprocessor.io.command.executionStatus
+    io.debugExecutionStatus := streamingMultiprocessor.io.command.executionStatus
     io.memory <> streamingMultiprocessor.io.memory
   }
 }

@@ -7,8 +7,8 @@ This repository exposes a single-SM architecture with a real launch, fetch, deco
 - `GpuTop` wraps one `StreamingMultiprocessor`, exposes a top-level AXI4 memory boundary for unified code/data memory, and exposes AXI-Lite MMIO for launch and status control.
 - PTX subset source is compiled ahead of time into raw SpinalGPU `.bin` machine code.
 - The SM is composed from concrete submodules with stable typed interfaces:
-  - `KernelControlBlock`
-  - `LaunchController`
+  - `HostControlBlock`
+  - `SmAdmissionController`
   - `WarpStateTable`
   - `WarpScheduler`
   - `InstructionFetchUnit`
@@ -37,7 +37,7 @@ This repository exposes a single-SM architecture with a real launch, fetch, deco
   - `BLOCK_DIM_X`
   - `ARG_BASE`
   - `SHARED_BYTES`
-- The `LaunchController` turns one block launch into resident warp contexts.
+- The `SmAdmissionController` turns one block launch into resident warp contexts.
 - The warp table stores runtime state only. It does not store PTX source text or a decoded kernel image.
 - The scheduler selects a runnable warp, the fetch unit reads the machine instruction at that warp’s `pc`, and the decode/issue path sends the work to the correct unit.
 
@@ -45,8 +45,8 @@ This repository exposes a single-SM architecture with a real launch, fetch, deco
 
 | Module | Responsibility | Current Step-1 Behavior |
 | --- | --- | --- |
-| `KernelControlBlock` | Exposes launch/status CSRs over AXI-Lite | Launch registers and status reads |
-| `LaunchController` | Validates launches, clears shared memory, initializes warp contexts | One-block v1 launch only |
+| `HostControlBlock` | Exposes command/status CSRs over AXI-Lite | Command registers and execution-status reads |
+| `SmAdmissionController` | Validates commands, clears shared memory, initializes warp contexts | One-block v1 command only |
 | `WarpStateTable` | Holds resident warp runtime context | Runtime-only context, no program storage |
 | `WarpScheduler` | Chooses the next runnable warp | Picks the lowest-index runnable warp |
 | `InstructionFetchUnit` | Reads 32-bit instructions from external memory | Aligned word fetch only |
@@ -210,8 +210,8 @@ flowchart LR
   BIN[SpinalGPU Machine Code]
   CSR[AXI-Lite Control]
   GPU[GpuTop]
-  KCB[KernelControlBlock]
-  LC[LaunchController]
+  HCB[HostControlBlock]
+  SAC[SmAdmissionController]
   WST[WarpStateTable]
   SCH[WarpScheduler]
   IFU[InstructionFetchUnit]
@@ -222,7 +222,7 @@ flowchart LR
 
   PTX --> TOOLCHAIN --> BIN --> MEM
   HOST --> CSR --> GPU
-  GPU --> KCB --> LC --> WST
+  GPU --> HCB --> SAC --> WST
   WST --> SCH --> IFU --> DEC --> RF --> EXEC
   IFU --> MEM
   EXEC --> MEM

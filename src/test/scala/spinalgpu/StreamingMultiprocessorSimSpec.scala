@@ -12,22 +12,22 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
   private val config = SmConfig.default
 
   private def pulseStart(dut: StreamingMultiprocessor): Unit = {
-    dut.io.control.start #= true
+    dut.io.command.start #= true
     dut.clockDomain.waitSampling()
-    dut.io.control.start #= false
+    dut.io.command.start #= false
   }
 
-  test("launch controller initializes warp contexts and schedules multiple warps") {
+  test("SM admission controller initializes warp contexts and schedules multiple warps") {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
-      dut.io.control.start #= false
-      dut.io.control.clearDone #= false
-      dut.io.control.launch.entryPc #= 0x100
-      dut.io.control.launch.gridDimX #= 1
-      dut.io.control.launch.blockDimX #= 40
-      dut.io.control.launch.argBase #= 0
-      dut.io.control.launch.sharedBytes #= 0
+      dut.io.command.start #= false
+      dut.io.command.clearDone #= false
+      dut.io.command.command.entryPc #= 0x100
+      dut.io.command.command.gridDimX #= 1
+      dut.io.command.command.blockDimX #= 40
+      dut.io.command.command.argBase #= 0
+      dut.io.command.command.sharedBytes #= 0
       dut.clockDomain.waitSampling()
       dut.clockDomain.deassertReset()
 
@@ -49,8 +49,8 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
       dut.io.debug.scheduledWarp.payload.context.threadBase.toBigInt shouldBe 32
       dut.io.debug.scheduledWarp.payload.context.threadCount.toBigInt shouldBe 8
 
-      dut.clockDomain.waitSamplingWhere(dut.io.control.status.done.toBoolean)
-      dut.io.control.status.fault.toBoolean shouldBe false
+      dut.clockDomain.waitSamplingWhere(dut.io.command.executionStatus.done.toBoolean)
+      dut.io.command.executionStatus.fault.toBoolean shouldBe false
 
       memory.stop()
     }
@@ -60,13 +60,13 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
-      dut.io.control.start #= false
-      dut.io.control.clearDone #= false
-      dut.io.control.launch.entryPc #= 0x80
-      dut.io.control.launch.gridDimX #= 1
-      dut.io.control.launch.blockDimX #= 1
-      dut.io.control.launch.argBase #= 0
-      dut.io.control.launch.sharedBytes #= 0
+      dut.io.command.start #= false
+      dut.io.command.clearDone #= false
+      dut.io.command.command.entryPc #= 0x80
+      dut.io.command.command.gridDimX #= 1
+      dut.io.command.command.blockDimX #= 1
+      dut.io.command.command.argBase #= 0
+      dut.io.command.command.sharedBytes #= 0
       dut.clockDomain.waitSampling()
       dut.clockDomain.deassertReset()
 
@@ -78,9 +78,9 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
 
       dut.clockDomain.waitSamplingWhere(dut.io.debug.trap.valid.toBoolean)
       dut.io.debug.trap.payload.faultCode.toBigInt shouldBe FaultCode.IllegalOpcode
-      dut.clockDomain.waitSamplingWhere(dut.io.control.status.done.toBoolean)
-      dut.io.control.status.fault.toBoolean shouldBe true
-      dut.io.control.status.faultCode.toBigInt shouldBe FaultCode.IllegalOpcode
+      dut.clockDomain.waitSamplingWhere(dut.io.command.executionStatus.done.toBoolean)
+      dut.io.command.executionStatus.fault.toBoolean shouldBe true
+      dut.io.command.executionStatus.faultCode.toBigInt shouldBe FaultCode.IllegalOpcode
 
       memory.stop()
     }
@@ -90,13 +90,13 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
-      dut.io.control.start #= false
-      dut.io.control.clearDone #= false
-      dut.io.control.launch.entryPc #= 0x102
-      dut.io.control.launch.gridDimX #= 1
-      dut.io.control.launch.blockDimX #= 1
-      dut.io.control.launch.argBase #= 0
-      dut.io.control.launch.sharedBytes #= 0
+      dut.io.command.start #= false
+      dut.io.command.clearDone #= false
+      dut.io.command.command.entryPc #= 0x102
+      dut.io.command.command.gridDimX #= 1
+      dut.io.command.command.blockDimX #= 1
+      dut.io.command.command.argBase #= 0
+      dut.io.command.command.sharedBytes #= 0
       dut.clockDomain.waitSampling()
       dut.clockDomain.deassertReset()
 
@@ -107,9 +107,9 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
 
       dut.clockDomain.waitSamplingWhere(dut.io.debug.trap.valid.toBoolean)
       dut.io.debug.trap.payload.faultCode.toBigInt shouldBe FaultCode.MisalignedFetch
-      dut.clockDomain.waitSamplingWhere(dut.io.control.status.done.toBoolean)
-      dut.io.control.status.fault.toBoolean shouldBe true
-      dut.io.control.status.faultCode.toBigInt shouldBe FaultCode.MisalignedFetch
+      dut.clockDomain.waitSamplingWhere(dut.io.command.executionStatus.done.toBoolean)
+      dut.io.command.executionStatus.fault.toBoolean shouldBe true
+      dut.io.command.executionStatus.faultCode.toBigInt shouldBe FaultCode.MisalignedFetch
 
       memory.stop()
     }

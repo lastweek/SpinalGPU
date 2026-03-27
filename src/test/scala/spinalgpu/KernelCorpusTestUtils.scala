@@ -66,13 +66,13 @@ object KernelCorpusTestUtils {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
-      dut.io.control.start #= false
-      dut.io.control.clearDone #= false
-      dut.io.control.launch.entryPc #= kernel.launch.entryPc
-      dut.io.control.launch.gridDimX #= kernel.launch.gridDimX
-      dut.io.control.launch.blockDimX #= kernel.launch.blockDimX
-      dut.io.control.launch.argBase #= kernel.launch.argBase
-      dut.io.control.launch.sharedBytes #= kernel.launch.sharedBytes
+      dut.io.command.start #= false
+      dut.io.command.clearDone #= false
+      dut.io.command.command.entryPc #= kernel.command.entryPc
+      dut.io.command.command.gridDimX #= kernel.command.gridDimX
+      dut.io.command.command.blockDimX #= kernel.command.blockDimX
+      dut.io.command.command.argBase #= kernel.command.argBase
+      dut.io.command.command.sharedBytes #= kernel.command.sharedBytes
       dut.clockDomain.waitSampling()
       dut.clockDomain.deassertReset()
 
@@ -80,21 +80,21 @@ object KernelCorpusTestUtils {
       memory.start()
       loadKernelCase(memory, kernel, config.byteCount)
 
-      dut.io.control.start #= true
+      dut.io.command.start #= true
       dut.clockDomain.waitSampling()
-      dut.io.control.start #= false
+      dut.io.command.start #= false
 
       var cycles = 0
-      while (!dut.io.control.status.done.toBoolean && cycles < kernel.timeoutCycles) {
+      while (!dut.io.command.executionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
         dut.clockDomain.waitSampling()
         cycles += 1
       }
 
       assert(
-        dut.io.control.status.done.toBoolean,
+        dut.io.command.executionStatus.done.toBoolean,
         s"${kernel.name} (${kernel.relativeSourcePath}) did not complete after $cycles cycles; " +
-          s"busy=${dut.io.control.status.busy.toBoolean} fault=${dut.io.control.status.fault.toBoolean} " +
-          s"faultCode=${dut.io.control.status.faultCode.toBigInt} " +
+          s"busy=${dut.io.command.executionStatus.busy.toBoolean} fault=${dut.io.command.executionStatus.fault.toBoolean} " +
+          s"faultCode=${dut.io.command.executionStatus.faultCode.toBigInt} " +
           s"engineState=${dut.io.debug.engineState.toBigInt} " +
           s"selectedWarp=${dut.io.debug.selectedWarpId.toBigInt} " +
           s"selectedPc=0x${dut.io.debug.selectedPc.toBigInt.toString(16)}"
@@ -105,9 +105,9 @@ object KernelCorpusTestUtils {
         kernel,
         config.byteCount,
         FaultObservation(
-          fault = dut.io.control.status.fault.toBoolean,
-          code = dut.io.control.status.faultCode.toBigInt,
-          faultPc = dut.io.control.status.faultPc.toBigInt
+          fault = dut.io.command.executionStatus.fault.toBoolean,
+          code = dut.io.command.executionStatus.faultCode.toBigInt,
+          faultPc = dut.io.command.executionStatus.faultPc.toBigInt
         )
       )
 
@@ -126,26 +126,26 @@ object KernelCorpusTestUtils {
       dut.coreClockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.coreClockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
-      val control = AxiLite4Driver(dut.io.control, dut.coreClockDomain)
+      val hostControl = AxiLite4Driver(dut.io.hostControl, dut.coreClockDomain)
       memory.start()
-      control.reset()
+      hostControl.reset()
 
       loadKernelCase(memory, kernel, config.byteCount)
-      ExecutionTestUtils.launchKernel(control, dut.coreClockDomain, kernel.launch)
+      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
 
       var cycles = 0
-      while (!dut.io.debugStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
+      while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
         dut.coreClockDomain.waitSampling()
         cycles += 1
       }
 
       assert(
-        dut.io.debugStatus.done.toBoolean,
+        dut.io.debugExecutionStatus.done.toBoolean,
         s"${kernel.name} (${kernel.relativeSourcePath}) did not complete after $cycles cycles; " +
-          s"busy=${dut.io.debugStatus.busy.toBoolean} " +
-          s"fault=${dut.io.debugStatus.fault.toBoolean} " +
-          s"faultCode=${dut.io.debugStatus.faultCode.toBigInt} " +
-          s"faultPc=0x${dut.io.debugStatus.faultPc.toBigInt.toString(16)}"
+          s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
+          s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
+          s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
+          s"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
       )
 
       assertKernelExpectation(
@@ -153,9 +153,9 @@ object KernelCorpusTestUtils {
         kernel,
         config.byteCount,
         FaultObservation(
-          fault = dut.io.debugStatus.fault.toBoolean,
-          code = dut.io.debugStatus.faultCode.toBigInt,
-          faultPc = dut.io.debugStatus.faultPc.toBigInt
+          fault = dut.io.debugExecutionStatus.fault.toBoolean,
+          code = dut.io.debugExecutionStatus.faultCode.toBigInt,
+          faultPc = dut.io.debugExecutionStatus.faultPc.toBigInt
         )
       )
 

@@ -15,11 +15,11 @@ class GpuTopSimSpec extends AnyFunSuite with Matchers {
       dut.coreClockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.coreClockDomain, AxiMemorySimConfig())
-      val control = AxiLite4Driver(dut.io.control, dut.coreClockDomain)
+      val hostControl = AxiLite4Driver(dut.io.hostControl, dut.coreClockDomain)
       memory.start()
-      control.reset()
+      hostControl.reset()
 
-      ExecutionTestUtils.readStatus(control, dut.coreClockDomain) shouldBe BigInt(0)
+      ExecutionTestUtils.readExecutionStatus(hostControl, dut.coreClockDomain) shouldBe BigInt(0)
       dut.coreClockDomain.waitSampling(5)
 
       memory.stop()

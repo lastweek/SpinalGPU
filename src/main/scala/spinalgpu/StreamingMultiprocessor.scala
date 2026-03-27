@@ -4,11 +4,11 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 
-case class StreamingMultiprocessorControlIo(config: SmConfig) extends Bundle {
-  val launch = in(KernelLaunchDesc(config))
+case class StreamingMultiprocessorCommandIo(config: SmConfig) extends Bundle {
+  val command = in(KernelCommandDesc(config))
   val start = in Bool()
   val clearDone = in Bool()
-  val status = out(LaunchStatus(config))
+  val executionStatus = out(KernelExecutionStatus(config))
 }
 
 case class StreamingMultiprocessorDebugIo(config: SmConfig) extends Bundle {
@@ -34,7 +34,7 @@ case class StreamingMultiprocessorDebugIo(config: SmConfig) extends Bundle {
 
 case class StreamingMultiprocessorIo(config: SmConfig) extends Bundle {
   val memory = master(Axi4(config.axiConfig))
-  val control = StreamingMultiprocessorControlIo(config)
+  val command = StreamingMultiprocessorCommandIo(config)
   val debug = StreamingMultiprocessorDebugIo(config)
 }
 
@@ -45,7 +45,7 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
 
   val io = StreamingMultiprocessorIo(config)
 
-  private val launchController = new LaunchController(config)
+  private val smAdmissionController = new SmAdmissionController(config)
   private val warpStateTable = new WarpStateTable(config)
   private val warpScheduler = new WarpScheduler(config)
   private val registerFile = new WarpRegisterFile(config)
@@ -74,12 +74,12 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   selectedContextReg.exited.init(False)
   selectedContextReg.faulted.init(False)
 
-  launchController.io.launch := io.control.launch
-  launchController.io.start := io.control.start
-  launchController.io.clearDone := io.control.clearDone
-  io.control.status := launchController.io.status
+  smAdmissionController.io.command := io.command.command
+  smAdmissionController.io.start := io.command.start
+  smAdmissionController.io.clearDone := io.command.clearDone
+  io.command.executionStatus := smAdmissionController.io.executionStatus
 
-  warpStateTable.io.launchWrite <> launchController.io.warpInitWrite
+  warpStateTable.io.launchWrite <> smAdmissionController.io.warpInitWrite
   private val updateWriteValid = Bool()
   private val updateWriteIndex = UInt(config.warpIdWidth bits)
   private val updateWriteContext = WarpContext(config)
@@ -90,7 +90,7 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   warpStateTable.io.updateWrite.payload.index := updateWriteIndex
   warpStateTable.io.updateWrite.payload.context := updateWriteContext
 
-  registerFile.io.clearWarp <> launchController.io.registerFileClear
+  registerFile.io.clearWarp <> smAdmissionController.io.registerFileClear
   registerFile.io.write.valid := False
   registerFile.io.write.payload.warpId := selectedWarpIdReg
   registerFile.io.write.payload.rd := U(0, config.registerAddressWidth bits)
@@ -99,8 +99,8 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
     registerFile.io.write.payload.data(lane) := B(0, config.dataWidth bits)
   }
 
-  launchController.io.sharedClearBusy := sharedMemory.io.clear.busy
-  sharedMemory.io.clear.start := launchController.io.sharedClearStart
+  smAdmissionController.io.sharedClearBusy := sharedMemory.io.clear.busy
+  sharedMemory.io.clear.start := smAdmissionController.io.sharedClearStart
 
   warpScheduler.io.warpContexts := warpStateTable.io.states
 
@@ -139,10 +139,10 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   private val advancePc = (selectedContextReg.pc + U(4, config.addressWidth bits)).resized
   private val branchTarget = (advancePc + immediateUInt.resized).resized
   private val blockWarpCount =
-    ((launchController.io.currentLaunch.blockDimX.resize(config.dataWidth) + U(config.warpSize - 1, config.dataWidth bits)) /
+    ((smAdmissionController.io.currentCommand.blockDimX.resize(config.dataWidth) + U(config.warpSize - 1, config.dataWidth bits)) /
       U(config.warpSize, config.dataWidth bits)).resized
-  private val gridIdLow = launchController.io.currentGridId(31 downto 0).resize(config.dataWidth)
-  private val gridIdHigh = launchController.io.currentGridId(63 downto 32).resize(config.dataWidth)
+  private val gridIdLow = smAdmissionController.io.currentGridId(31 downto 0).resize(config.dataWidth)
+  private val gridIdHigh = smAdmissionController.io.currentGridId(63 downto 32).resize(config.dataWidth)
 
   private val specialValues = Vec(UInt(config.dataWidth bits), config.warpSize)
   for (lane <- 0 until config.warpSize) {
@@ -159,7 +159,7 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
         specialValues(lane) := selectedWarpIdReg.resize(config.dataWidth)
       }
       is(U(SpecialRegisterKind.NtidX, config.specialRegisterWidth bits)) {
-        specialValues(lane) := launchController.io.currentLaunch.blockDimX.resize(config.dataWidth)
+        specialValues(lane) := smAdmissionController.io.currentCommand.blockDimX.resize(config.dataWidth)
       }
       is(U(SpecialRegisterKind.CtaidX, config.specialRegisterWidth bits)) {
         specialValues(lane) := U(0, config.dataWidth bits)
@@ -183,15 +183,15 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
         specialValues(lane) := gridIdHigh
       }
       is(U(SpecialRegisterKind.ArgBase, config.specialRegisterWidth bits)) {
-        specialValues(lane) := launchController.io.currentLaunch.argBase.resize(config.dataWidth)
+        specialValues(lane) := smAdmissionController.io.currentCommand.argBase.resize(config.dataWidth)
       }
     }
   }
 
-  fetchUnit.io.request.valid := launchController.io.status.busy && engineState === EngineState.IDLE && warpScheduler.io.schedule.valid
+  fetchUnit.io.request.valid := smAdmissionController.io.executionStatus.busy && engineState === EngineState.IDLE && warpScheduler.io.schedule.valid
   fetchUnit.io.request.payload.warpId := warpScheduler.io.schedule.payload.warpId
   fetchUnit.io.request.payload.pc := warpScheduler.io.schedule.payload.context.pc
-  warpScheduler.io.schedule.ready := fetchUnit.io.request.ready && launchController.io.status.busy && engineState === EngineState.IDLE
+  warpScheduler.io.schedule.ready := fetchUnit.io.request.ready && smAdmissionController.io.executionStatus.busy && engineState === EngineState.IDLE
 
   cudaCoreArray.io.issue.valid := False
   cudaCoreArray.io.issue.payload.warpId := selectedWarpIdReg
@@ -277,9 +277,9 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   }
 
   private val allWarpTerminal = warpStateTable.io.states.map(context => !context.valid || context.exited || context.faulted).foldLeft(True)(_ && _)
-  launchController.io.kernelComplete := launchController.io.status.busy && engineState === EngineState.IDLE && allWarpTerminal
-  launchController.io.trapInfo.valid := io.debug.trap.valid
-  launchController.io.trapInfo.payload := io.debug.trap.payload
+  smAdmissionController.io.kernelComplete := smAdmissionController.io.executionStatus.busy && engineState === EngineState.IDLE && allWarpTerminal
+  smAdmissionController.io.trapInfo.valid := io.debug.trap.valid
+  smAdmissionController.io.trapInfo.payload := io.debug.trap.payload
 
   when(warpScheduler.io.schedule.fire) {
     selectedWarpIdReg := warpScheduler.io.schedule.payload.warpId
