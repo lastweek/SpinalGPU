@@ -1,6 +1,31 @@
 // Purpose: Store the current %gridid value to global memory.
 // Primary feature: special_registers
 // Expected outcome: success
+//
+// High-level execution flow:
+// - The kernel loads one output pointer.
+// - It reads the current %gridid special register into a 64-bit PTX register.
+// - It stores that 64-bit value to global memory so the harness can observe the launch ID.
+//
+// Where this fits:
+// - This is the teaching example for the repo's narrow public .u64 path.
+// - It demonstrates that %gridid is temporal launch state rather than per-thread arithmetic state.
+//
+// Key model details:
+// - %gridid is the only public 64-bit special-register path in the current PTX subset.
+// - The stored value occupies two 32-bit words in memory.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void grid_id_store(unsigned long long* out) {
+//   unsigned long long gridid;
+//   asm volatile("mov.u64 %0, %%gridid;" : "=l"(gridid));
+//   out[0] = gridid;
+// }
+//
+// SpinalGPU note:
+// - The CUDA sketch relies on inline PTX because %gridid is not a normal CUDA C builtin.
+//   In this repo, the value increments once per accepted launch and is internally lowered
+//   through paired 32-bit machine operations.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -13,10 +38,12 @@
     .reg .u64 %rd<1>;
 
     // Setup
+    // Load the destination pointer and materialize the current launch ID into %rd0.
     ld.param.u32 %r0, [out_ptr_param];
     mov.u64 %rd0, %gridid;
 
     // Core
+    // Store the 64-bit launch ID so the harness can observe the current grid counter.
     st.global.u64 [%r0], %rd0;
 
     // Exit

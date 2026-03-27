@@ -1,6 +1,27 @@
 // Purpose: Raise an explicit trap.
 // Primary feature: control
 // Expected outcome: fault
+//
+// High-level execution flow:
+// - The kernel performs no setup or normal computation.
+// - It immediately executes trap, which terminates the kernel through the fault path.
+//
+// Where this fits:
+// - This is the simplest explicit runtime-fault example in the corpus.
+// - It isolates the trap instruction from memory, branching, and parameter handling.
+//
+// Key model details:
+// - No parameters or registers are needed.
+// - The only expected outcome is that the control frontend reports a trap fault.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void trap_kernel() {
+//   __trap();
+// }
+//
+// SpinalGPU note:
+// - This kernel exists purely to validate the fault-reporting path. It is intentionally
+//   minimal so any failure is attributable to trap handling rather than surrounding logic.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -8,9 +29,12 @@
 .visible .entry trap()
 {
     // Setup
+    // No setup is required before the explicit trap.
 
     // Core
+    // There is no normal "core" work for this kernel.
 
     // Fault trigger
+    // Raise an explicit runtime trap immediately.
     trap;
 }

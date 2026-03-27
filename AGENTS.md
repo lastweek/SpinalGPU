@@ -44,6 +44,24 @@ This repository is an architecture-first educational GPU project in SpinalHDL. F
 - Update architecture docs and diagrams alongside interface or hierarchy changes.
 - Keep the docs specific to this repo’s SM design, not generic GPU summaries.
 - Prefer concise text-first diagrams that live in the repo and can be reviewed with code changes.
+- Future PTX kernels under `kernels/**/*.ptx` must keep the three metadata lines first:
+  - `// Purpose:`
+  - `// Primary feature:`
+  - `// Expected outcome:`
+- Future PTX kernels under `kernels/**/*.ptx` must keep the corpus section markers:
+  - `// Setup`
+  - `// Core`
+  - `// Exit` or `// Fault trigger`
+- Future PTX kernels under `kernels/**/*.ptx` must include the rich teaching-comment block after the
+  metadata lines, using `//` comments only and these exact headings:
+  - `// High-level execution flow:`
+  - `// Where this fits:`
+  - `// Key model details:`
+  - `// CUDA-equivalent sketch (.cu):`
+  - `// SpinalGPU note:`
+- Future PTX kernels must always include a CUDA-equivalent sketch, even when the mapping is only approximate.
+- Future PTX kernels must use `// SpinalGPU note:` to explain any mismatch from normal CUDA behavior, especially
+  for one-CTA teaching launches, divergence faults, special-register access, alignment faults, or other repo-specific behavior.
 
 ## Anti-Patterns
 

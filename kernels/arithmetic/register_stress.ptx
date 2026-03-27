@@ -1,6 +1,38 @@
 // Purpose: Store one value from every allocatable PTX register to global memory.
 // Primary feature: arithmetic
 // Expected outcome: success
+//
+// High-level execution flow:
+// - The kernel loads the output pointer into the highest-numbered allocatable register.
+// - It assigns distinct constant values to the remaining allocatable PTX registers.
+// - It then writes the register contents to consecutive global-memory words so the test
+//   harness can verify that the frontend register allocation and writeback paths behaved.
+//
+// Where this fits:
+// - This is a frontend/resource-pressure test more than a realistic arithmetic workload.
+// - It proves the assembler and machine register layout can sustain a nearly full PTX
+//   register declaration without corrupting values.
+//
+// Key model details:
+// - The constants 100..128 make each logical register easy to identify in the output.
+// - The final store of %r29 shows that the pointer-holding register stays live through
+//   the whole sequence of arithmetic-register initialization.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void register_stress(unsigned* out) {
+//   unsigned values[29];
+//   for (unsigned i = 0; i < 29; ++i) {
+//     values[i] = 100u + i;
+//   }
+//   for (unsigned i = 0; i < 29; ++i) {
+//     out[i] = values[i];
+//   }
+// }
+//
+// SpinalGPU note:
+// - Ordinary CUDA does not promise a one-to-one mapping between source locals and PTX
+//   register names, so this sketch only approximates the intent. The real teaching goal
+//   here is to stress this repo's PTX register allocator and live-register handling.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -12,9 +44,11 @@
     .reg .u32 %r<30>;
 
     // Setup
+    // Keep the output pointer in the highest-numbered allocatable PTX register.
     ld.param.u32 %r29, [out_ptr_param];
 
     // Core
+    // Fill the remaining PTX registers with recognizable values.
     mov.u32 %r0, 100;
     mov.u32 %r1, 101;
     mov.u32 %r2, 102;
@@ -45,6 +79,7 @@
     mov.u32 %r27, 127;
     mov.u32 %r28, 128;
 
+    // Dump the register contents to consecutive output words.
     st.global.u32 [%r29 + 0], %r0;
     st.global.u32 [%r29 + 4], %r1;
     st.global.u32 [%r29 + 8], %r2;

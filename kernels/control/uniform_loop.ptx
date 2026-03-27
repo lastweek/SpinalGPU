@@ -1,6 +1,32 @@
 // Purpose: Run a uniform countdown loop and store the terminal value.
 // Primary feature: control
 // Expected outcome: success
+//
+// High-level execution flow:
+// - The kernel initializes a countdown value to 3.
+// - All active lanes execute the same loop body until the countdown reaches zero.
+// - Once the loop exits, the terminal value is written to global memory.
+//
+// Where this fits:
+// - This is the positive control-flow example that the current SIMT model handles cleanly.
+// - It demonstrates predicated uniform looping without triggering the divergence fault path.
+//
+// Key model details:
+// - The loop predicate is uniform because every lane starts from the same constant.
+// - All lanes store the same final value, so a single output word is sufficient.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void uniform_loop(unsigned* out) {
+//   unsigned countdown = 3u;
+//   while (countdown != 0u) {
+//     countdown--;
+//   }
+//   out[0] = countdown;
+// }
+//
+// SpinalGPU note:
+// - The important property is that every active lane makes the same branch decision on
+//   every iteration. That is why this loop succeeds while the divergent branch test faults.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -13,13 +39,16 @@
     .pred %p<1>;
 
     // Setup
+    // Seed the uniform countdown value.
     mov.u32 %r0, 3;
 
     // Core
 loop:
+    // Count down and keep looping while the value is non-zero.
     add.u32 %r0, %r0, -1;
     setp.ne.u32 %p0, %r0, 0;
     @%p0 bra loop;
+    // After the loop exits, write the terminal value to the output pointer.
     ld.param.u32 %r1, [out_ptr_param];
     st.global.u32 [%r1], %r0;
 

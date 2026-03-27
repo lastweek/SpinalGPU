@@ -1,6 +1,40 @@
 // Purpose: Add two FP32 row-major matrices using CUDA cores and 2D thread coordinates.
 // Primary feature: floating_point
 // Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread computes exactly one output element C[row, col].
+// - %tid.x is interpreted as the column index and %tid.y as the row index.
+// - Threads first guard against rows/cols bounds, then compute three row-major addresses:
+//   one for A[row, col], one for B[row, col], and one for C[row, col].
+// - The kernel loads two FP32 values from global memory, adds them on the CUDA-core path,
+//   and stores the FP32 result back to global memory.
+//
+// Where this fits:
+// - This is the simplest end-to-end FP32 CUDA-core example in the repo.
+// - It demonstrates the full path from .param loads, to 2D thread coordinates, to
+//   FP32 global-memory traffic, to add.f32 execution, to the final global store.
+//
+// Key model details:
+// - A, B, and C all live in global memory.
+// - lda, ldb, and ldc are element strides, not byte strides.
+// - After forming the row-major element index, the PTX shifts left by 2 to scale by
+//   4 bytes per FP32 element.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void matrix_add_f32(const float* A, const float* B, float* C,
+//                                unsigned rows, unsigned cols,
+//                                unsigned lda, unsigned ldb, unsigned ldc) {
+//   unsigned col = threadIdx.x;
+//   unsigned row = threadIdx.y;
+//   if (row < rows && col < cols) {
+//     C[row * ldc + col] = A[row * lda + col] + B[row * ldb + col];
+//   }
+// }
+//
+// SpinalGPU note:
+// - The PTX surface now exposes 3D thread builtins, but this teaching kernel still runs
+//   inside a single CTA in the current runtime, so there is no blockIdx-style tiling here.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -21,6 +55,10 @@
     .pred %p<2>;
 
     // Setup
+    // Load base pointers and matrix shape/stride parameters.
+    // %r0/%r1/%r2: A/B/C base pointers in global memory.
+    // %r3/%r4: rows and cols bounds.
+    // %r5/%r6/%r7: lda, ldb, ldc element strides.
     ld.param.u32 %r0, [a_ptr_param];
     ld.param.u32 %r1, [b_ptr_param];
     ld.param.u32 %r2, [c_ptr_param];
@@ -29,30 +67,37 @@
     ld.param.u32 %r5, [lda_param];
     ld.param.u32 %r6, [ldb_param];
     ld.param.u32 %r7, [ldc_param];
+    // Map thread coordinates onto matrix coordinates: col = %tid.x, row = %tid.y.
     mov.u32 %r8, %tid.x;
     mov.u32 %r9, %tid.y;
 
     // Core
+    // Exit early if this thread falls outside the logical output matrix.
     setp.lt.u32 %p0, %r9, %r3;
     @!%p0 bra done;
     setp.lt.u32 %p1, %r8, %r4;
     @!%p1 bra done;
 
+    // Form the A[row, col] address:
+    // linear element index = row * lda + col, then scale to bytes.
     mul.lo.u32 %r10, %r9, %r5;
     add.u32 %r10, %r10, %r8;
     shl.b32 %r11, %r10, 2;
     add.u32 %r12, %r0, %r11;
 
+    // Form the B[row, col] address with ldb.
     mul.lo.u32 %r13, %r9, %r6;
     add.u32 %r13, %r13, %r8;
     shl.b32 %r14, %r13, 2;
     add.u32 %r15, %r1, %r14;
 
+    // Form the C[row, col] address with ldc.
     mul.lo.u32 %r16, %r9, %r7;
     add.u32 %r16, %r16, %r8;
     shl.b32 %r17, %r16, 2;
     add.u32 %r18, %r2, %r17;
 
+    // Load the two FP32 inputs, add them on the CUDA-core path, and store the FP32 result.
     ld.global.f32 %f0, [%r12];
     ld.global.f32 %f1, [%r15];
     add.f32 %f2, %f0, %f1;

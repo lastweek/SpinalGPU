@@ -1,6 +1,30 @@
 // Purpose: Write a constant arithmetic result to global memory.
 // Primary feature: arithmetic
 // Expected outcome: success
+//
+// High-level execution flow:
+// - The kernel loads one output pointer, materializes two immediate constants, adds them,
+//   and writes the sum to global memory.
+// - There is no loop or lane-varying control flow; the body is a straight-line sanity check.
+//
+// Where this fits:
+// - This is the smallest arithmetic kernel in the teaching corpus.
+// - It validates .param loading, add.u32 execution, and a single aligned global store.
+//
+// Key model details:
+// - Only one 32-bit output word is written.
+// - The interesting behavior is the instruction path, not parallel work distribution.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void add_store_exit(unsigned* out) {
+//   if (threadIdx.x == 0) {
+//     out[0] = 7u + 11u;
+//   }
+// }
+//
+// SpinalGPU note:
+// - The corpus uses this as a deterministic smoke test, so a single store is enough to
+//   prove the arithmetic datapath, parameter path, and global store path all work together.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -12,9 +36,11 @@
     .reg .u32 %r<4>;
 
     // Setup
+    // %r0 holds the destination pointer supplied by the launch argument buffer.
     ld.param.u32 %r0, [out_ptr_param];
 
     // Core
+    // Materialize two constants, add them, and write the result to global memory.
     mov.u32 %r1, 7;
     mov.u32 %r2, 11;
     add.u32 %r3, %r1, %r2;

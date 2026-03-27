@@ -1,6 +1,30 @@
 // Purpose: Store each thread's %tid.x to global memory.
 // Primary feature: special_registers
 // Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread reads its own %tid.x.
+// - It converts that thread index into a byte offset.
+// - It stores the thread index to out[%tid.x].
+//
+// Where this fits:
+// - This is the simplest special-register kernel in the corpus.
+// - It demonstrates that builtin reads behave like ordinary integer values once moved
+//   into a PTX register.
+//
+// Key model details:
+// - %tid.x is used both as the stored payload and as the output index.
+// - shl.b32 scales the index by 4 bytes for a 32-bit global store.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void thread_id_store(unsigned* out) {
+//   unsigned tid = threadIdx.x;
+//   out[tid] = tid;
+// }
+//
+// SpinalGPU note:
+// - The teaching harness uses one CTA, so %tid.x alone is enough to explain the visible
+//   output pattern without involving blockIdx-based global indexing.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -12,10 +36,12 @@
     .reg .u32 %r<4>;
 
     // Setup
+    // Load the destination pointer and capture the per-thread x coordinate.
     ld.param.u32 %r0, [out_ptr_param];
     mov.u32 %r1, %tid.x;
 
     // Core
+    // Scale %tid.x to a byte offset and store the thread ID at out[%tid.x].
     shl.b32 %r2, %r1, 2;
     add.u32 %r3, %r0, %r2;
     st.global.u32 [%r3], %r1;

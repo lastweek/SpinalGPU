@@ -1,6 +1,32 @@
 // Purpose: Compute C[i] = A[i] + B[i] for one warp.
 // Primary feature: global_memory
 // Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread uses %tid.x as a vector element index i.
+// - It forms byte addresses for A[i], B[i], and C[i], loads the two inputs, adds them,
+//   and stores the sum to the output vector.
+// - One warp is enough to cover the full teaching example.
+//
+// Where this fits:
+// - This is the first realistic global-memory arithmetic kernel in the corpus.
+// - It demonstrates per-thread indexing, coalescable global loads/stores, and integer
+//   address math feeding the CUDA-core integer add path.
+//
+// Key model details:
+// - %tid.x selects one vector lane.
+// - shl.b32 scales the element index by 4 bytes to form FP32/u32-sized addresses.
+// - The harness launches one warp-sized CTA so the lane-to-element mapping is obvious.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_add_1warp(const unsigned* A, const unsigned* B, unsigned* C) {
+//   unsigned i = threadIdx.x;
+//   C[i] = A[i] + B[i];
+// }
+//
+// SpinalGPU note:
+// - The corpus keeps this to one warp so the address pattern is easy to inspect, but the
+//   important teaching point is the per-thread global-memory address formation.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -14,16 +40,19 @@
     .reg .u32 %r<10>;
 
     // Setup
+    // Load the three vector base pointers and the per-thread element index.
     ld.param.u32 %r0, [a_ptr_param];
     ld.param.u32 %r1, [b_ptr_param];
     ld.param.u32 %r2, [c_ptr_param];
     mov.u32 %r3, %tid.x;
 
     // Core
+    // Convert the element index into a byte offset, then form A/B/C addresses.
     shl.b32 %r4, %r3, 2;
     add.u32 %r5, %r0, %r4;
     add.u32 %r6, %r1, %r4;
     add.u32 %r7, %r2, %r4;
+    // Load two 32-bit inputs, add them, and store the vector sum.
     ld.global.u32 %r8, [%r5];
     ld.global.u32 %r9, [%r6];
     add.u32 %r8, %r8, %r9;

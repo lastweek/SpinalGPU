@@ -1,6 +1,44 @@
 // Purpose: Multiply two FP32 row-major matrices using CUDA cores and fused multiply-add.
 // Primary feature: floating_point
 // Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread computes one output element C[row, col].
+// - %tid.x is the output column and %tid.y is the output row.
+// - Threads first guard against the MxN output bounds, then iterate kk from 0 to k - 1.
+// - On each loop iteration the kernel loads A[row, kk] and B[kk, col], performs
+//   fma.rn.f32, and accumulates into a scalar FP32 register.
+// - After the loop completes, the thread stores the final accumulator to C[row, col].
+//
+// Where this fits:
+// - This is the first real loop-and-accumulate FP32 CUDA-core kernel in the repo.
+// - It demonstrates integer address arithmetic plus FP32 fused multiply-add on the same
+//   execution path, which is the core shape of a simple untiled GEMM kernel.
+//
+// Key model details:
+// - A, B, and C live in global memory.
+// - lda, ldb, and ldc are element strides.
+// - The PTX computes row-major element indices and then shifts left by 2 to convert
+//   those element indices into byte addresses for FP32 loads and stores.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void matrix_mul_f32(const float* A, const float* B, float* C,
+//                                unsigned m, unsigned n, unsigned k,
+//                                unsigned lda, unsigned ldb, unsigned ldc) {
+//   unsigned col = threadIdx.x;
+//   unsigned row = threadIdx.y;
+//   if (row < m && col < n) {
+//     float acc = 0.0f;
+//     for (unsigned kk = 0; kk < k; ++kk) {
+//       acc += A[row * lda + kk] * B[kk * ldb + col];
+//     }
+//     C[row * ldc + col] = acc;
+//   }
+// }
+//
+// SpinalGPU note:
+// - The PTX surface now exposes 3D thread builtins, but the current runtime still launches
+//   one CTA for this teaching kernel, so the flow relies only on thread coordinates here.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -22,6 +60,10 @@
     .pred %p<3>;
 
     // Setup
+    // Load base pointers plus matrix extents and leading dimensions.
+    // %r0/%r1/%r2: A/B/C base pointers.
+    // %r3/%r4/%r5: m, n, k.
+    // %r6/%r7/%r8: lda, ldb, ldc element strides.
     ld.param.u32 %r0, [a_ptr_param];
     ld.param.u32 %r1, [b_ptr_param];
     ld.param.u32 %r2, [c_ptr_param];
@@ -31,40 +73,53 @@
     ld.param.u32 %r6, [lda_param];
     ld.param.u32 %r7, [ldb_param];
     ld.param.u32 %r8, [ldc_param];
+    // Map thread coordinates onto the output element this thread owns.
     mov.u32 %r9, %tid.x;
     mov.u32 %r10, %tid.y;
 
     // Core
+    // Exit immediately if this thread lies outside the logical MxN output matrix.
     setp.lt.u32 %p0, %r10, %r3;
     @!%p0 bra done;
     setp.lt.u32 %p1, %r9, %r4;
     @!%p1 bra done;
 
+    // %r11 is the kk loop counter.
+    // %f0 is the FP32 accumulator, initialized to 0.0f.
     mov.u32 %r11, 0;
     mov.f32 %f0, 0f00000000;
 
 loop:
+    // Continue while kk < k.
     setp.lt.u32 %p2, %r11, %r5;
     @!%p2 bra store_result;
 
+    // Form the A[row, kk] address:
+    // row-major element index = row * lda + kk, then scale to bytes.
     mul.lo.u32 %r12, %r10, %r6;
     add.u32 %r12, %r12, %r11;
     shl.b32 %r13, %r12, 2;
     add.u32 %r14, %r0, %r13;
 
+    // Form the B[kk, col] address:
+    // row-major element index = kk * ldb + col, then scale to bytes.
     mul.lo.u32 %r15, %r11, %r7;
     add.u32 %r15, %r15, %r9;
     shl.b32 %r16, %r15, 2;
     add.u32 %r17, %r1, %r16;
 
+    // Load one FP32 from A and one from B, then accumulate with fused multiply-add.
+    // fma.rn.f32 keeps the multiply-and-add in a single FP32 accumulation step.
     ld.global.f32 %f1, [%r14];
     ld.global.f32 %f2, [%r17];
     fma.rn.f32 %f0, %f1, %f2, %f0;
 
+    // Advance kk and repeat.
     add.u32 %r11, %r11, 1;
     bra loop;
 
 store_result:
+    // Form the C[row, col] address and write the final FP32 accumulator.
     mul.lo.u32 %r18, %r10, %r8;
     add.u32 %r18, %r18, %r9;
     shl.b32 %r19, %r18, 2;

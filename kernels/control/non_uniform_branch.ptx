@@ -1,6 +1,34 @@
 // Purpose: Branch on lane-varying state to provoke a non-uniform branch fault.
 // Primary feature: control
 // Expected outcome: fault
+//
+// High-level execution flow:
+// - Each thread reads its own %tid.x.
+// - The kernel forms a predicate that is false for lane 0 and true for all other lanes.
+// - It then branches on that lane-varying predicate, which intentionally provokes a
+//   non-uniform branch fault in the current SpinalGPU control-flow model.
+//
+// Where this fits:
+// - This is the negative control-flow test for the current SIMT frontend.
+// - It documents the gap between classic PTX divergence semantics and this repo's
+//   current "uniform branches only" execution model.
+//
+// Key model details:
+// - The predicate differs across active lanes because it is derived from %tid.x.
+// - The kernel is expected to fault before any useful work completes.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void non_uniform_branch() {
+//   if (threadIdx.x != 0) {
+//     // taken path
+//   } else {
+//     // fallthrough path
+//   }
+// }
+//
+// SpinalGPU note:
+// - Real CUDA hardware supports divergent branches and later reconverges them. The
+//   current SpinalGPU runtime does not; it raises a non-uniform-branch fault instead.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -11,12 +39,15 @@
     .pred %p<1>;
 
     // Setup
+    // %r0 now holds the per-thread x coordinate that will drive a lane-varying predicate.
     mov.u32 %r0, %tid.x;
 
     // Core
+    // %p0 is false for thread 0 and true for every other active thread.
     setp.ne.u32 %p0, %r0, 0;
 
     // Fault trigger
+    // Because %p0 differs across lanes, this branch is intentionally non-uniform.
     @%p0 bra taken;
     ret;
 taken:

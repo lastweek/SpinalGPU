@@ -1,6 +1,48 @@
 // Purpose: Store the basic lane, warp, block, and SM special-register values to global memory.
 // Primary feature: special_registers
 // Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread reads a bundle of builtin values: %laneid, %warpid, %ntid.x, %ctaid.x,
+//   %nctaid.x, %nwarpid, %smid, and %nsmid.
+// - It computes one per-thread byte offset and writes each builtin into a separate section
+//   of the output buffer.
+// - The result is a block-sized table where each 160-byte region corresponds to one builtin.
+//
+// Where this fits:
+// - This is the direct teaching kernel for basic special-register coverage.
+// - It shows how builtin reads map onto ordinary integer registers before being stored.
+//
+// Key model details:
+// - The sections are spaced by 40 words, which is 160 bytes for the default blockDimX=40 case.
+// - Some builtins collapse to constants in this repo: one CTA means %ctaid.x == 0 and
+//   %nctaid.x == 1, and the one-SM model means %smid == 0 and %nsmid == 1.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void basic_special_register_store(unsigned* out) {
+//   unsigned tid = threadIdx.x;
+//   unsigned lane = tid % warpSize;
+//   unsigned warp = tid / warpSize;
+//   unsigned ntid = blockDim.x;
+//   unsigned ctaid = blockIdx.x;
+//   unsigned nctaid = gridDim.x;
+//   unsigned nwarpid = (blockDim.x + warpSize - 1) / warpSize;
+//   unsigned smid, nsmid;
+//   asm volatile("mov.u32 %0, %%smid;" : "=r"(smid));
+//   asm volatile("mov.u32 %0, %%nsmid;" : "=r"(nsmid));
+//   out[tid + 0 * 40] = lane;
+//   out[tid + 1 * 40] = warp;
+//   out[tid + 2 * 40] = ntid;
+//   out[tid + 3 * 40] = ctaid;
+//   out[tid + 4 * 40] = nctaid;
+//   out[tid + 5 * 40] = nwarpid;
+//   out[tid + 6 * 40] = smid;
+//   out[tid + 7 * 40] = nsmid;
+// }
+//
+// SpinalGPU note:
+// - The sketch is close, but the observed values are shaped by this repo's one-CTA,
+//   one-SM teaching runtime, so several builtins collapse to simple constants here.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -12,7 +54,9 @@
     .reg .u32 %r<11>;
 
     // Setup
+    // %r0 is the base pointer. %r1 is reused as the per-thread output offset driver.
     ld.param.u32 %r0, [out_ptr_param];
+    // Read the builtin values into ordinary integer registers before storing them.
     mov.u32 %r1, %tid.x;
     mov.u32 %r2, %laneid;
     mov.u32 %r3, %warpid;
@@ -24,6 +68,8 @@
     mov.u32 %r9, %nsmid;
 
     // Core
+    // Convert %tid.x into a per-thread byte offset, then store each builtin into its
+    // own 40-word region of the output table.
     shl.b32 %r10, %r1, 2;
     add.u32 %r10, %r0, %r10;
     st.global.u32 [%r10 + 0], %r2;

@@ -1,6 +1,33 @@
 // Purpose: Round-trip %tid.x through shared memory and write it to global memory.
 // Primary feature: shared_memory
 // Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread reads its own %tid.x.
+// - It writes that value into a thread-private slot in shared memory, reads the same slot
+//   back, and then writes the round-tripped value to global memory.
+// - The round-trip proves both shared-memory store and load paths before the final global store.
+//
+// Where this fits:
+// - This is the simplest shared-memory example in the corpus.
+// - It demonstrates shared symbol addressing plus a per-thread byte offset derived from %tid.x.
+//
+// Key model details:
+// - shared_data is a 256-byte shared-memory region, treated as 32-bit words here.
+// - Each thread uses its own slot, so no barrier is required.
+// - The same byte offset is reused for both shared memory and the output buffer.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void shared_roundtrip(unsigned* out) {
+//   __shared__ unsigned shared_data[64];
+//   unsigned tid = threadIdx.x;
+//   shared_data[tid] = tid;
+//   out[tid] = shared_data[tid];
+// }
+//
+// SpinalGPU note:
+// - There is no __syncthreads() here because every thread writes and reads only its own
+//   shared-memory slot. The example teaches address formation, not cross-thread sharing.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -13,13 +40,17 @@
     .shared .align 4 .b8 shared_data[256];
 
     // Setup
+    // Load the output pointer and the per-thread index that will also become the payload.
     ld.param.u32 %r0, [out_ptr_param];
     mov.u32 %r1, %tid.x;
 
     // Core
+    // Use %tid.x * 4 bytes as both the shared-memory slot and the output offset.
     shl.b32 %r2, %r1, 2;
+    // Round-trip the per-thread value through shared memory.
     st.shared.u32 [shared_data + %r2], %r1;
     ld.shared.u32 %r3, [shared_data + %r2];
+    // Reuse the same offset for the final global-memory write.
     add.u32 %r4, %r0, %r2;
     st.global.u32 [%r4], %r3;
 

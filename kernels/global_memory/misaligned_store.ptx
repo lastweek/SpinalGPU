@@ -1,6 +1,29 @@
 // Purpose: Store to a misaligned global address to provoke a load/store fault.
 // Primary feature: global_memory
 // Expected outcome: fault
+//
+// High-level execution flow:
+// - The kernel loads a base output pointer and a small test value.
+// - It then performs a 32-bit global store at base + 2 bytes instead of an aligned address.
+// - That misaligned access intentionally triggers the global-memory fault path.
+//
+// Where this fits:
+// - This is the negative test for global-memory alignment checking.
+// - It proves that the LSU rejects illegal 32-bit accesses instead of silently completing them.
+//
+// Key model details:
+// - SpinalGPU global 32-bit accesses must be word-aligned.
+// - The fault is caused by address formation alone; there is no loop or data dependence.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void misaligned_store(unsigned* out) {
+//   unsigned value = 1u;
+//   *reinterpret_cast<unsigned*>(reinterpret_cast<char*>(out) + 2) = value;
+// }
+//
+// SpinalGPU note:
+// - This sketch shows the closest CUDA-side idea, but the teaching point is repo-specific:
+//   the current SpinalGPU LSU treats a misaligned 32-bit global store as a hard fault.
 .version 8.0
 .target spinalgpu
 .address_size 32
@@ -12,12 +35,15 @@
     .reg .u32 %r<2>;
 
     // Setup
+    // %r0 is the base pointer; %r1 is the test value that would be written on success.
     ld.param.u32 %r0, [out_ptr_param];
     mov.u32 %r1, 1;
 
     // Core
+    // No normal core work is needed; the next instruction intentionally faults.
 
     // Fault trigger
+    // Adding 2 bytes makes this 32-bit store misaligned on purpose.
     st.global.u32 [%r0 + 2], %r1;
     ret;
 }
