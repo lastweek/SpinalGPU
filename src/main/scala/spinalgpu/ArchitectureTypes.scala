@@ -43,8 +43,26 @@ case class WarpContextWrite(config: SmConfig) extends Bundle {
   val context = WarpContext(config)
 }
 
+case class WarpBindingInfo(config: SmConfig) extends Bundle {
+  val bound = Bool()
+  val subSmId = UInt(config.subSmIdWidth bits)
+  val localSlotId = UInt(config.localSlotIdWidth bits)
+}
+
 case class WarpScheduleReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
+  val context = WarpContext(config)
+}
+
+case class SubSmBindReq(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val subSmId = UInt(config.subSmIdWidth bits)
+  val localSlotId = UInt(config.localSlotIdWidth bits)
+}
+
+case class SubSmScheduleReq(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val localSlotId = UInt(config.localSlotIdWidth bits)
   val context = WarpContext(config)
 }
 

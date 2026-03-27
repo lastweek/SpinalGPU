@@ -6,8 +6,9 @@ import spinal.lib.bus.amba4.axilite.AxiLite4Config
 
 case class SmConfig(
     warpSize: Int = 32,
-    schedulerCount: Int = 1,
-    cudaLaneCount: Int = 8,
+    subSmCount: Int = 4,
+    residentWarpsPerSubSm: Int = 2,
+    subSmIssueWidth: Int = 32,
     cudaIntegerLatency: Int = 1,
     fpAddLatency: Int = 4,
     fpMulLatency: Int = 4,
@@ -17,7 +18,6 @@ case class SmConfig(
     tensorCoreCount: Int = 1,
     sharedMemoryBankCount: Int = 32,
     sharedMemoryBytes: Int = 4 * 1024,
-    residentWarpCount: Int = 4,
     addressWidth: Int = 32,
     dataWidth: Int = 32,
     axiIdWidth: Int = 1,
@@ -25,9 +25,10 @@ case class SmConfig(
     controlAddressWidth: Int = 8
 ) {
   require(warpSize > 0 && warpSize % 8 == 0, "warpSize must be a positive multiple of 8")
-  require(schedulerCount > 0, "schedulerCount must be positive")
-  require(cudaLaneCount > 0, "cudaLaneCount must be positive")
-  require(warpSize % cudaLaneCount == 0, "warpSize must be an integer multiple of cudaLaneCount")
+  require(subSmCount > 0, "subSmCount must be positive")
+  require(residentWarpsPerSubSm > 0, "residentWarpsPerSubSm must be positive")
+  require(subSmIssueWidth > 0, "subSmIssueWidth must be positive")
+  require(warpSize % subSmIssueWidth == 0, "warpSize must be an integer multiple of subSmIssueWidth")
   require(cudaIntegerLatency > 0, "cudaIntegerLatency must be positive")
   require(fpAddLatency > 0, "fpAddLatency must be positive")
   require(fpMulLatency > 0, "fpMulLatency must be positive")
@@ -37,15 +38,19 @@ case class SmConfig(
   require(tensorCoreCount > 0, "tensorCoreCount must be positive")
   require(sharedMemoryBankCount > 0, "sharedMemoryBankCount must be positive")
   require(sharedMemoryBytes > 0, "sharedMemoryBytes must be positive")
-  require(residentWarpCount > 0, "residentWarpCount must be positive")
   require(dataWidth % 8 == 0, "dataWidth must be a multiple of 8")
   require(registerCount == 32, "v1 frontend assumes 32 general-purpose registers")
 
+  val schedulerCount: Int = subSmCount
+  val cudaLaneCount: Int = subSmIssueWidth
+  val residentWarpCount: Int = subSmCount * residentWarpsPerSubSm
   val instructionWidth: Int = 32
   val pcWidth: Int = addressWidth
   val byteCount: Int = dataWidth / 8
   val byteMaskWidth: Int = byteCount
   val warpIdWidth: Int = log2Up(residentWarpCount max 2)
+  val subSmIdWidth: Int = log2Up(subSmCount max 2)
+  val localSlotIdWidth: Int = log2Up(residentWarpsPerSubSm max 2)
   val registerAddressWidth: Int = log2Up(registerCount max 2)
   val maxBlockThreads: Int = residentWarpCount * warpSize
   val threadCountWidth: Int = log2Up(maxBlockThreads + 1)

@@ -10,8 +10,8 @@ class ArchitectureSkeletonSpec extends AnyFunSuite with Matchers {
   test("GpuTop elaborates across three SM configurations") {
     val configs = Seq(
       SmConfig.default,
-      SmConfig(cudaLaneCount = 4, residentWarpCount = 2, sharedMemoryBytes = 2048),
-      SmConfig(cudaLaneCount = 16, residentWarpCount = 8, sharedMemoryBytes = 8192)
+      SmConfig(subSmCount = 1, residentWarpsPerSubSm = 1, subSmIssueWidth = 32, sharedMemoryBytes = 2048),
+      SmConfig(subSmCount = 2, residentWarpsPerSubSm = 2, subSmIssueWidth = 32, sharedMemoryBytes = 8192)
     )
 
     configs.zipWithIndex.foreach { case (config, index) =>

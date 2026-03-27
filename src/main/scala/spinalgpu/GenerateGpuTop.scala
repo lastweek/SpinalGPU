@@ -6,6 +6,19 @@ import spinal.core._
 
 object GenerateGpuTop extends App {
   private val targetDir = Path.of("generated/verilog")
+  private val config =
+    args.toList match {
+      case Nil => SmConfig.default
+      case List(subSmCount, residentWarpsPerSubSm, subSmIssueWidth, sharedMemoryBytes) =>
+        SmConfig(
+          subSmCount = subSmCount.toInt,
+          residentWarpsPerSubSm = residentWarpsPerSubSm.toInt,
+          subSmIssueWidth = subSmIssueWidth.toInt,
+          sharedMemoryBytes = sharedMemoryBytes.toInt
+        )
+      case _ =>
+        sys.error("usage: GenerateGpuTop [subSmCount residentWarpsPerSubSm subSmIssueWidth sharedMemoryBytes]")
+    }
 
   if (Files.exists(targetDir)) {
     Files
@@ -17,5 +30,5 @@ object GenerateGpuTop extends App {
   SpinalConfig(
     targetDirectory = targetDir.toString,
     oneFilePerComponent = true
-  ).generateVerilog(new GpuTop)
+  ).generateVerilog(new GpuTop(config))
 }

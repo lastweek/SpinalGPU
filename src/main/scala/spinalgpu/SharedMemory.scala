@@ -18,6 +18,11 @@ class SharedMemory(config: SmConfig) extends Component {
   private val readPendingValid = RegInit(False)
   private val readPendingWarpId = Reg(UInt(config.warpIdWidth bits)) init (0)
   private val readPendingBankIndex = Reg(UInt(config.sharedBankIndexWidth bits)) init (0)
+  rspPayload.warpId.init(0)
+  rspPayload.completed.init(False)
+  rspPayload.error.init(False)
+  rspPayload.bankIndex.init(0)
+  rspPayload.readData.init(0)
   private val readData = memory.readSync(
     address = io.request.payload.address,
     enable = io.request.fire && !io.request.payload.write && !clearBusy

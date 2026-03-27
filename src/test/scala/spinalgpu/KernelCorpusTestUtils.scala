@@ -16,6 +16,23 @@ import spinalgpu.toolchain.KernelCorpus._
 object KernelCorpusTestUtils {
   private final case class FaultObservation(fault: Boolean, code: BigInt, faultPc: BigInt)
 
+  private def waitForGpuTopCompletion(dut: GpuTop, kernel: KernelCase): Unit = {
+    var cycles = 0
+    while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
+      dut.coreClockDomain.waitSampling()
+      cycles += 1
+    }
+
+    assert(
+      dut.io.debugExecutionStatus.done.toBoolean,
+      s"${kernel.name} (${kernel.relativeSourcePath}) did not complete after $cycles cycles; " +
+        s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
+        s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
+        s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
+        f"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
+    )
+  }
+
   /** Loads the generated machine code and applies the declarative preload image before launch. */
   def loadKernelCase(memory: AxiMemorySim, kernel: KernelCase, byteCount: Int): Unit = {
     ExecutionTestUtils.loadBinaryFile(memory, kernel.entryPc, kernel.binaryPath, byteCount)
@@ -148,7 +165,8 @@ object KernelCorpusTestUtils {
 
       loadKernelCase(memory, kernel, config.byteCount)
       ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
-      ExecutionTestUtils.waitForExecutionComplete(hostControl, dut.coreClockDomain, timeoutCycles = kernel.timeoutCycles)
+      waitForGpuTopCompletion(dut, kernel)
+      dut.coreClockDomain.waitSampling(8)
 
       assertKernelExpectation(
         memory,

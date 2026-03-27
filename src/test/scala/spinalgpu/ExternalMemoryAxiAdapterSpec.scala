@@ -7,7 +7,13 @@ import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
 
 class ExternalMemoryAxiAdapterSpec extends AnyFunSuite with Matchers {
-  private val config = SmConfig(warpSize = 8, cudaLaneCount = 4, residentWarpCount = 1, sharedMemoryBytes = 256)
+  private val config = SmConfig(
+    warpSize = 8,
+    subSmCount = 1,
+    residentWarpsPerSubSm = 1,
+    subSmIssueWidth = 4,
+    sharedMemoryBytes = 256
+  )
 
   private def initDefaults(dut: ExternalMemoryAxiAdapter): Unit = {
     dut.io.request.valid #= false

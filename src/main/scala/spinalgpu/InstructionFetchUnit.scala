@@ -16,6 +16,11 @@ class InstructionFetchUnit(config: SmConfig) extends Component {
   private val waitingOnMemory = RegInit(False)
   private val rspValid = RegInit(False)
   private val rspPayload = Reg(FetchRsp(config))
+  rspPayload.warpId.init(0)
+  rspPayload.pc.init(0)
+  rspPayload.instruction.init(0)
+  rspPayload.fault.init(False)
+  rspPayload.faultCode.init(FaultCode.None)
 
   private val misaligned = io.request.payload.pc(1 downto 0) =/= 0
   private val canAcceptRequest = !waitingOnMemory && !rspValid

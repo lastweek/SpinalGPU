@@ -29,6 +29,25 @@ class LoadStoreUnit(config: SmConfig) extends Component {
   private val currentGroupFaultAddress = Reg(UInt(config.addressWidth bits)) init (0)
   private val currentGroupLaneIndices = Vec.fill(config.cudaLaneCount)(Reg(UInt(log2Up(config.warpSize) bits)) init (0))
 
+  pending.warpId.init(0)
+  pending.addressSpace.init(AddressSpaceKind.GLOBAL)
+  pending.write.init(False)
+  pending.activeMask.init(0)
+  pending.byteMask.init(0)
+  for (lane <- 0 until config.warpSize) {
+    pending.addresses(lane).init(0)
+    pending.writeData(lane).init(0)
+  }
+
+  rspPayload.warpId.init(0)
+  rspPayload.completed.init(False)
+  rspPayload.error.init(False)
+  rspPayload.faultCode.init(FaultCode.None)
+  rspPayload.faultAddress.init(0)
+  for (lane <- 0 until config.warpSize) {
+    rspPayload.readData(lane).init(0)
+  }
+
   private val nextActiveValid = Bool()
   private val nextActiveIndex = UInt(log2Up(config.warpSize) bits)
   nextActiveIndex := laneIndex

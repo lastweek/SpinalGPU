@@ -4,20 +4,17 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
-import spinalgpu.toolchain.KernelCorpus
 
-// Low-level launch, fetch, and trap behavior stays explicit here.
-// Corpus-backed PTX execution cases are generated below through the shared declarative runner.
-class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
-  private val config = SmConfig.default
+abstract class StreamingMultiprocessorSingleSimSpec extends AnyFunSuite with Matchers {
+  protected val config: SmConfig = SmConfig.default
 
-  private def pulseStart(dut: StreamingMultiprocessor): Unit = {
+  protected def pulseStart(dut: StreamingMultiprocessor): Unit = {
     dut.io.command.start #= true
     dut.clockDomain.waitSampling()
     dut.io.command.start #= false
   }
 
-  private def waitUntil(dut: StreamingMultiprocessor, timeoutCycles: Int, label: String)(condition: => Boolean): Unit = {
+  protected def waitUntil(dut: StreamingMultiprocessor, timeoutCycles: Int, label: String)(condition: => Boolean): Unit = {
     var cycles = 0
     while (!condition && cycles < timeoutCycles) {
       dut.clockDomain.waitSampling()
@@ -37,7 +34,9 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
         s"invalidThreadCount=${dut.io.debug.launchInvalidBlockThreadCount.toBoolean} invalidShared=${dut.io.debug.launchInvalidSharedBytes.toBoolean}"
     )
   }
+}
 
+class StreamingMultiprocessorAdmissionSpec extends StreamingMultiprocessorSingleSimSpec {
   test("SM admission controller initializes warp contexts and schedules multiple warps") {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
@@ -88,7 +87,9 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
       memory.stop()
     }
   }
+}
 
+class StreamingMultiprocessorIllegalOpcodeSpec extends StreamingMultiprocessorSingleSimSpec {
   test("illegal opcode traps and latches fault status") {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
@@ -126,7 +127,9 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
       memory.stop()
     }
   }
+}
 
+class StreamingMultiprocessorMisalignedFetchSpec extends StreamingMultiprocessorSingleSimSpec {
   test("misaligned fetch traps and latches fault status") {
     SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
@@ -161,12 +164,6 @@ class StreamingMultiprocessorSimSpec extends AnyFunSuite with Matchers {
       dut.io.command.executionStatus.faultCode.toBigInt shouldBe FaultCode.MisalignedFetch
 
       memory.stop()
-    }
-  }
-
-  KernelCorpus.streamingMultiprocessorCases.foreach { kernel =>
-    test(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
-      KernelCorpusTestUtils.runStreamingMultiprocessorKernelCase(kernel, config)
     }
   }
 }

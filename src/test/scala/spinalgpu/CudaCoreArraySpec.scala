@@ -5,7 +5,13 @@ import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
 
 class CudaCoreArraySpec extends AnyFunSuite with Matchers {
-  private val config = SmConfig(warpSize = 8, cudaLaneCount = 2, residentWarpCount = 1, sharedMemoryBytes = 256)
+  private val config = SmConfig(
+    warpSize = 8,
+    subSmCount = 1,
+    residentWarpsPerSubSm = 1,
+    subSmIssueWidth = 2,
+    sharedMemoryBytes = 256
+  )
   private val subwarpSliceCount = config.warpSize / config.cudaLaneCount
 
   private def initDefaults(dut: CudaCoreArray): Unit = {

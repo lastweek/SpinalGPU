@@ -25,6 +25,23 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   private val readBeatIndex = Reg(UInt(config.globalBurstBeatCountWidth bits)) init (0)
   private val readError = RegInit(False)
 
+  pending.warpId.init(0)
+  pending.write.init(False)
+  pending.address.init(0)
+  pending.beatCount.init(0)
+  pending.byteMask.init(0)
+  for (beat <- 0 until config.cudaLaneCount) {
+    pending.writeData(beat).init(0)
+  }
+
+  rspPayload.warpId.init(0)
+  rspPayload.completed.init(False)
+  rspPayload.error.init(False)
+  rspPayload.beatCount.init(0)
+  for (beat <- 0 until config.cudaLaneCount) {
+    rspPayload.readData(beat).init(0)
+  }
+
   io.request.ready := state === AdapterState.IDLE && !rspValid
 
   io.response.valid := rspValid

@@ -5,7 +5,13 @@ import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
 
 class LoadStoreUnitSpec extends AnyFunSuite with Matchers {
-  private val config = SmConfig(warpSize = 8, cudaLaneCount = 4, residentWarpCount = 1, sharedMemoryBytes = 256)
+  private val config = SmConfig(
+    warpSize = 8,
+    subSmCount = 1,
+    residentWarpsPerSubSm = 1,
+    subSmIssueWidth = 4,
+    sharedMemoryBytes = 256
+  )
 
   private def initDefaults(dut: LoadStoreUnit): Unit = {
     dut.io.issue.valid #= false

@@ -35,6 +35,11 @@ case class StreamingMultiprocessorDebugIo(config: SmConfig) extends Bundle {
   val launchInvalidBlockThreadCount = out(Bool())
   val launchInvalidSharedBytes = out(Bool())
   val launchRequestedBlockThreads = out(UInt((config.threadCountWidth * 3) bits))
+  val subSmEngineStates = out(Vec(UInt(3 bits), config.subSmCount))
+  val subSmSelectedWarpIds = out(Vec(UInt(config.warpIdWidth bits), config.subSmCount))
+  val subSmSelectedPcs = out(Vec(UInt(config.addressWidth bits), config.subSmCount))
+  val subSmSlotOccupied = out(Vec(Bits(config.residentWarpsPerSubSm bits), config.subSmCount))
+  val subSmBoundWarpIds = out(Vec(Vec(UInt(config.warpIdWidth bits), config.residentWarpsPerSubSm), config.subSmCount))
 }
 
 case class StreamingMultiprocessorIo(config: SmConfig) extends Bundle {
@@ -44,44 +49,25 @@ case class StreamingMultiprocessorIo(config: SmConfig) extends Bundle {
 }
 
 class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends Component {
-  private object EngineState extends SpinalEnum {
-    val IDLE, WAIT_FETCH, ISSUE, WAIT_CUDA, WAIT_LSU, WAIT_SFU, WAIT_TENSOR = newElement()
-  }
-
   val io = StreamingMultiprocessorIo(config)
 
   private val smAdmissionController = new SmAdmissionController(config)
   private val warpStateTable = new WarpStateTable(config)
-  private val warpScheduler = new WarpScheduler(config)
-  private val registerFile = new WarpRegisterFile(config)
-  private val fetchUnit = new InstructionFetchUnit(config)
-  private val decodeUnit = new DecodeUnit(config)
-  private val cudaCoreArray = new CudaCoreArray(config)
-  private val loadStoreUnit = new LoadStoreUnit(config)
-  private val specialFunctionUnit = new SpecialFunctionUnit(config)
-  private val tensorCoreBlock = new TensorCoreBlock(config)
+  private val warpBinder = new WarpBinder(config)
+  private val subSms = Array.fill(config.subSmCount)(new SubSmPartition(config))
+  private val l0InstructionCaches = Array.fill(config.subSmCount)(new L0InstructionCache(config))
+  private val l1InstructionCache = new L1InstructionCache(config)
+  private val l1DataSharedMemory = new L1DataSharedMemory(config)
   private val sharedMemory = new SharedMemory(config)
   private val externalMemoryArbiter = new ExternalMemoryArbiter(config)
   private val externalMemoryAdapter = new ExternalMemoryAxiAdapter(config)
 
-  private val engineState = RegInit(EngineState.IDLE)
-  private val selectedWarpIdReg = Reg(UInt(config.warpIdWidth bits)) init (0)
-  private val selectedContextReg = Reg(WarpContext(config))
-  private val instructionReg = Reg(Bits(config.instructionWidth bits)) init (0)
-  private val blockThreadCountWidth = config.threadCountWidth * 3
-
-  selectedContextReg.valid.init(False)
-  selectedContextReg.runnable.init(False)
-  selectedContextReg.pc.init(0)
-  selectedContextReg.activeMask.init(0)
-  selectedContextReg.threadBase.init(0)
-  selectedContextReg.threadBaseX.init(0)
-  selectedContextReg.threadBaseY.init(0)
-  selectedContextReg.threadBaseZ.init(0)
-  selectedContextReg.threadCount.init(0)
-  selectedContextReg.outstanding.init(False)
-  selectedContextReg.exited.init(False)
-  selectedContextReg.faulted.init(False)
+  private val bindingTable = Vec.fill(config.residentWarpCount)(Reg(WarpBindingInfo(config)))
+  bindingTable.foreach { binding =>
+    binding.bound.init(False)
+    binding.subSmId.init(0)
+    binding.localSlotId.init(0)
+  }
 
   smAdmissionController.io.command := io.command.command
   smAdmissionController.io.start := io.command.start
@@ -89,467 +75,182 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   io.command.executionStatus := smAdmissionController.io.executionStatus
 
   warpStateTable.io.launchWrite <> smAdmissionController.io.warpInitWrite
-  private val updateWriteValid = Bool()
-  private val updateWriteIndex = UInt(config.warpIdWidth bits)
-  private val updateWriteContext = WarpContext(config)
-  updateWriteValid := False
-  updateWriteIndex := selectedWarpIdReg
-  updateWriteContext := selectedContextReg
-  warpStateTable.io.updateWrite.valid := updateWriteValid
-  warpStateTable.io.updateWrite.payload.index := updateWriteIndex
-  warpStateTable.io.updateWrite.payload.context := updateWriteContext
-
-  registerFile.io.clearWarp <> smAdmissionController.io.registerFileClear
-  registerFile.io.write.valid := False
-  registerFile.io.write.payload.warpId := selectedWarpIdReg
-  registerFile.io.write.payload.rd := U(0, config.registerAddressWidth bits)
-  registerFile.io.write.payload.writeMask := B(0, config.warpSize bits)
-  for (lane <- 0 until config.warpSize) {
-    registerFile.io.write.payload.data(lane) := B(0, config.dataWidth bits)
+  for (subSm <- 0 until config.subSmCount) {
+    warpStateTable.io.updateWrites(subSm).valid := subSms(subSm).io.contextUpdate.valid
+    warpStateTable.io.updateWrites(subSm).payload := subSms(subSm).io.contextUpdate.payload
   }
 
+  sharedMemory.io.request <> l1DataSharedMemory.io.sharedMemReq
+  l1DataSharedMemory.io.sharedMemRsp <> sharedMemory.io.response
   smAdmissionController.io.sharedClearBusy := sharedMemory.io.clear.busy
   sharedMemory.io.clear.start := smAdmissionController.io.sharedClearStart
 
-  warpScheduler.io.warpContexts := warpStateTable.io.states
+  for (subSm <- 0 until config.subSmCount) {
+    l0InstructionCaches(subSm).io.request <> subSms(subSm).io.fetchMemReq
+    subSms(subSm).io.fetchMemRsp <> l0InstructionCaches(subSm).io.response
+    l1InstructionCache.io.subSmReq(subSm) <> l0InstructionCaches(subSm).io.l1Req
+    l0InstructionCaches(subSm).io.l1Rsp <> l1InstructionCache.io.subSmRsp(subSm)
 
-  sharedMemory.io.request <> loadStoreUnit.io.sharedMemReq
-  loadStoreUnit.io.sharedMemRsp <> sharedMemory.io.response
+    l1DataSharedMemory.io.sharedReq(subSm) <> subSms(subSm).io.sharedMemReq
+    subSms(subSm).io.sharedMemRsp <> l1DataSharedMemory.io.sharedRsp(subSm)
+    l1DataSharedMemory.io.externalReq(subSm) <> subSms(subSm).io.externalMemReq
+    subSms(subSm).io.externalMemRsp <> l1DataSharedMemory.io.externalRsp(subSm)
+  }
 
-  externalMemoryArbiter.io.fetchReq <> fetchUnit.io.memoryReq
-  fetchUnit.io.memoryRsp <> externalMemoryArbiter.io.fetchRsp
-  externalMemoryArbiter.io.lsuReq <> loadStoreUnit.io.externalMemReq
-  loadStoreUnit.io.externalMemRsp <> externalMemoryArbiter.io.lsuRsp
+  externalMemoryArbiter.io.fetchReq <> l1InstructionCache.io.memoryReq
+  l1InstructionCache.io.memoryRsp <> externalMemoryArbiter.io.fetchRsp
+  externalMemoryArbiter.io.lsuReq <> l1DataSharedMemory.io.memoryReq
+  l1DataSharedMemory.io.memoryRsp <> externalMemoryArbiter.io.lsuRsp
   externalMemoryAdapter.io.request <> externalMemoryArbiter.io.memoryReq
   externalMemoryArbiter.io.memoryRsp <> externalMemoryAdapter.io.response
   io.memory <> externalMemoryAdapter.io.axi
 
-  decodeUnit.io.instruction := instructionReg
+  private val partitionKernelBusy = smAdmissionController.io.executionStatus.busy && !smAdmissionController.io.warpInitWrite.valid
+  private val clearBindingsPulse = smAdmissionController.io.warpInitWrite.valid && smAdmissionController.io.warpInitWrite.payload.index === 0
 
-  private val readAddrA = UInt(config.registerAddressWidth bits)
-  private val readAddrB = UInt(config.registerAddressWidth bits)
-  private val readAddrC = UInt(config.registerAddressWidth bits)
-  readAddrA := U(0, config.registerAddressWidth bits)
-  readAddrB := U(0, config.registerAddressWidth bits)
-  readAddrC := U(0, config.registerAddressWidth bits)
-
-  when(decodeUnit.io.decoded.usesRs0 || decodeUnit.io.decoded.isStore || decodeUnit.io.decoded.isBranch) {
-    readAddrA := decodeUnit.io.decoded.rs0
-  }
-  when(decodeUnit.io.decoded.isStore) {
-    readAddrB := decodeUnit.io.decoded.rd
-  } elsewhen (decodeUnit.io.decoded.usesRs1) {
-    readAddrB := decodeUnit.io.decoded.rs1
-  }
-  when(decodeUnit.io.decoded.usesRs2) {
-    readAddrC := decodeUnit.io.decoded.rs2
+  warpBinder.io.warpContexts := warpStateTable.io.states
+  warpBinder.io.bindings := bindingTable
+  for (subSm <- 0 until config.subSmCount) {
+    subSms(subSm).io.kernelBusy := partitionKernelBusy
+    subSms(subSm).io.clearBindings := clearBindingsPulse
+    subSms(subSm).io.warpContexts := warpStateTable.io.states
+    subSms(subSm).io.currentCommand := smAdmissionController.io.currentCommand
+    subSms(subSm).io.currentGridId := smAdmissionController.io.currentGridId
+    warpBinder.io.subSmRequest(subSm) := subSms(subSm).io.bindRequest
+    warpBinder.io.freeLocalSlotId(subSm) := subSms(subSm).io.bindLocalSlotId
+    subSms(subSm).io.bind.valid := warpBinder.io.bind.valid && warpBinder.io.bind.payload.subSmId === U(subSm, config.subSmIdWidth bits)
+    subSms(subSm).io.bind.payload := warpBinder.io.bind.payload
   }
 
-  registerFile.io.readWarpId := selectedWarpIdReg
-  registerFile.io.readAddrA := readAddrA
-  registerFile.io.readAddrB := readAddrB
-  registerFile.io.readAddrC := readAddrC
-
-  private val immediateUInt = decodeUnit.io.decoded.immediate.asUInt
-  private val advancePc = (selectedContextReg.pc + U(4, config.addressWidth bits)).resized
-  private val branchTarget = (advancePc + immediateUInt.resized).resized
-  private val currentBlockThreadCount =
-    (smAdmissionController.io.currentCommand.blockDimX.resize(blockThreadCountWidth bits) *
-      smAdmissionController.io.currentCommand.blockDimY.resize(blockThreadCountWidth bits) *
-      smAdmissionController.io.currentCommand.blockDimZ.resize(blockThreadCountWidth bits)).resized
-  private val blockWarpCount =
-    ((currentBlockThreadCount.resized.resize(config.dataWidth bits) + U(config.warpSize - 1, config.dataWidth bits)) /
-      U(config.warpSize, config.dataWidth bits)).resized
-  private val gridIdLow = smAdmissionController.io.currentGridId(31 downto 0).resize(config.dataWidth)
-  private val gridIdHigh = smAdmissionController.io.currentGridId(63 downto 32).resize(config.dataWidth)
-
-  private val laneTidX = Vec(UInt(config.threadCountWidth bits), config.warpSize)
-  private val laneTidY = Vec(UInt(config.threadCountWidth bits), config.warpSize)
-  private val laneTidZ = Vec(UInt(config.threadCountWidth bits), config.warpSize)
-  laneTidX(0) := selectedContextReg.threadBaseX
-  laneTidY(0) := selectedContextReg.threadBaseY
-  laneTidZ(0) := selectedContextReg.threadBaseZ
-  for (lane <- 1 until config.warpSize) {
-    val (nextX, nextY, nextZ) = ThreadCoordinateLogic.increment(
-      config,
-      laneTidX(lane - 1),
-      laneTidY(lane - 1),
-      laneTidZ(lane - 1),
-      smAdmissionController.io.currentCommand.blockDimX,
-      smAdmissionController.io.currentCommand.blockDimY,
-      smAdmissionController.io.currentCommand.blockDimZ
-    )
-    laneTidX(lane) := nextX
-    laneTidY(lane) := nextY
-    laneTidZ(lane) := nextZ
-  }
-
-  private val specialValues = Vec(UInt(config.dataWidth bits), config.warpSize)
-  for (lane <- 0 until config.warpSize) {
-    specialValues(lane) := U(0, config.dataWidth bits)
-    switch(decodeUnit.io.decoded.specialRegister) {
-      is(U(SpecialRegisterKind.TidX, config.specialRegisterWidth bits)) {
-        specialValues(lane) := laneTidX(lane).resize(config.dataWidth)
-      }
-      is(U(SpecialRegisterKind.TidY, config.specialRegisterWidth bits)) {
-        specialValues(lane) := laneTidY(lane).resize(config.dataWidth)
-      }
-      is(U(SpecialRegisterKind.TidZ, config.specialRegisterWidth bits)) {
-        specialValues(lane) := laneTidZ(lane).resize(config.dataWidth)
-      }
-      is(U(SpecialRegisterKind.LaneId, config.specialRegisterWidth bits)) {
-        specialValues(lane) := U(lane, config.dataWidth bits)
-      }
-      is(U(SpecialRegisterKind.WarpId, config.specialRegisterWidth bits)) {
-        specialValues(lane) := selectedWarpIdReg.resize(config.dataWidth)
-      }
-      is(U(SpecialRegisterKind.NtidX, config.specialRegisterWidth bits)) {
-        specialValues(lane) := smAdmissionController.io.currentCommand.blockDimX.resize(config.dataWidth)
-      }
-      is(U(SpecialRegisterKind.NtidY, config.specialRegisterWidth bits)) {
-        specialValues(lane) := smAdmissionController.io.currentCommand.blockDimY.resize(config.dataWidth)
-      }
-      is(U(SpecialRegisterKind.NtidZ, config.specialRegisterWidth bits)) {
-        specialValues(lane) := smAdmissionController.io.currentCommand.blockDimZ.resize(config.dataWidth)
-      }
-      is(U(SpecialRegisterKind.CtaidX, config.specialRegisterWidth bits)) {
-        specialValues(lane) := U(0, config.dataWidth bits)
-      }
-      is(U(SpecialRegisterKind.CtaidY, config.specialRegisterWidth bits)) {
-        specialValues(lane) := U(0, config.dataWidth bits)
-      }
-      is(U(SpecialRegisterKind.CtaidZ, config.specialRegisterWidth bits)) {
-        specialValues(lane) := U(0, config.dataWidth bits)
-      }
-      is(U(SpecialRegisterKind.NctaidX, config.specialRegisterWidth bits)) {
-        specialValues(lane) := 1
-      }
-      is(U(SpecialRegisterKind.NctaidY, config.specialRegisterWidth bits)) {
-        specialValues(lane) := 1
-      }
-      is(U(SpecialRegisterKind.NctaidZ, config.specialRegisterWidth bits)) {
-        specialValues(lane) := 1
-      }
-      is(U(SpecialRegisterKind.NwarpId, config.specialRegisterWidth bits)) {
-        specialValues(lane) := blockWarpCount
-      }
-      is(U(SpecialRegisterKind.SmId, config.specialRegisterWidth bits)) {
-        specialValues(lane) := 0
-      }
-      is(U(SpecialRegisterKind.NsmId, config.specialRegisterWidth bits)) {
-        specialValues(lane) := 1
-      }
-      is(U(SpecialRegisterKind.GridIdLo, config.specialRegisterWidth bits)) {
-        specialValues(lane) := gridIdLow
-      }
-      is(U(SpecialRegisterKind.GridIdHi, config.specialRegisterWidth bits)) {
-        specialValues(lane) := gridIdHigh
-      }
-      is(U(SpecialRegisterKind.ArgBase, config.specialRegisterWidth bits)) {
-        specialValues(lane) := smAdmissionController.io.currentCommand.argBase.resize(config.dataWidth)
-      }
+  when(smAdmissionController.io.warpInitWrite.valid) {
+    if (config.residentWarpCount == 1) {
+      bindingTable(0).bound := False
+      bindingTable(0).subSmId := U(0, config.subSmIdWidth bits)
+      bindingTable(0).localSlotId := U(0, config.localSlotIdWidth bits)
+    } else {
+      bindingTable(smAdmissionController.io.warpInitWrite.payload.index).bound := False
+      bindingTable(smAdmissionController.io.warpInitWrite.payload.index).subSmId := U(0, config.subSmIdWidth bits)
+      bindingTable(smAdmissionController.io.warpInitWrite.payload.index).localSlotId := U(0, config.localSlotIdWidth bits)
     }
   }
 
-  fetchUnit.io.request.valid := smAdmissionController.io.executionStatus.busy && engineState === EngineState.IDLE && warpScheduler.io.schedule.valid
-  fetchUnit.io.request.payload.warpId := warpScheduler.io.schedule.payload.warpId
-  fetchUnit.io.request.payload.pc := warpScheduler.io.schedule.payload.context.pc
-  warpScheduler.io.schedule.ready := fetchUnit.io.request.ready && smAdmissionController.io.executionStatus.busy && engineState === EngineState.IDLE
-
-  cudaCoreArray.io.issue.valid := False
-  cudaCoreArray.io.issue.payload.warpId := selectedWarpIdReg
-  cudaCoreArray.io.issue.payload.opcode := decodeUnit.io.decoded.opcode
-  cudaCoreArray.io.issue.payload.activeMask := selectedContextReg.activeMask
-  for (lane <- 0 until config.warpSize) {
-    cudaCoreArray.io.issue.payload.operandA(lane) := registerFile.io.readDataA(lane).asBits
-    cudaCoreArray.io.issue.payload.operandB(lane) := registerFile.io.readDataB(lane).asBits
-    cudaCoreArray.io.issue.payload.operandC(lane) := registerFile.io.readDataC(lane).asBits
-    when(decodeUnit.io.decoded.opcode === B(Opcode.MOVI, 8 bits) || decodeUnit.io.decoded.opcode === B(Opcode.ADDI, 8 bits)) {
-      cudaCoreArray.io.issue.payload.operandB(lane) := immediateUInt.resized.asBits
+  when(warpBinder.io.bind.valid) {
+    if (config.residentWarpCount == 1) {
+      bindingTable(0).bound := True
+      bindingTable(0).subSmId := warpBinder.io.bind.payload.subSmId
+      bindingTable(0).localSlotId := warpBinder.io.bind.payload.localSlotId
+    } else {
+      bindingTable(warpBinder.io.bind.payload.warpId).bound := True
+      bindingTable(warpBinder.io.bind.payload.warpId).subSmId := warpBinder.io.bind.payload.subSmId
+      bindingTable(warpBinder.io.bind.payload.warpId).localSlotId := warpBinder.io.bind.payload.localSlotId
     }
   }
-  cudaCoreArray.io.response.ready := engineState === EngineState.WAIT_CUDA
 
-  loadStoreUnit.io.issue.valid := False
-  loadStoreUnit.io.issue.payload.warpId := selectedWarpIdReg
-  loadStoreUnit.io.issue.payload.addressSpace := decodeUnit.io.decoded.addressSpace
-  loadStoreUnit.io.issue.payload.write := decodeUnit.io.decoded.isStore
-  loadStoreUnit.io.issue.payload.activeMask := selectedContextReg.activeMask
-  loadStoreUnit.io.issue.payload.byteMask := B((1 << config.byteMaskWidth) - 1, config.byteMaskWidth bits)
-  for (lane <- 0 until config.warpSize) {
-    loadStoreUnit.io.issue.payload.addresses(lane) := (registerFile.io.readDataA(lane) + immediateUInt.resized).resized
-    loadStoreUnit.io.issue.payload.writeData(lane) := registerFile.io.readDataB(lane).asBits
-  }
-  loadStoreUnit.io.response.ready := engineState === EngineState.WAIT_LSU
+  private val allWarpTerminal = warpStateTable.io.states.map(context => !context.valid || context.exited || context.faulted).foldLeft(True)(_ && _)
+  private val allSubSmsIdle = subSms.map(_.io.debug.engineState === 0).foldLeft(True)(_ && _)
+  smAdmissionController.io.kernelComplete := smAdmissionController.io.executionStatus.busy && allWarpTerminal && allSubSmsIdle
 
-  specialFunctionUnit.io.issue.valid := False
-  specialFunctionUnit.io.issue.payload.warpId := selectedWarpIdReg
-  specialFunctionUnit.io.issue.payload.opcode := decodeUnit.io.decoded.opcode
-  specialFunctionUnit.io.issue.payload.activeMask := selectedContextReg.activeMask
-  for (lane <- 0 until config.warpSize) {
-    specialFunctionUnit.io.issue.payload.operand(lane) := registerFile.io.readDataA(lane)
-  }
-  specialFunctionUnit.io.response.ready := engineState === EngineState.WAIT_SFU
+  smAdmissionController.io.trapInfo.valid := False
+  smAdmissionController.io.trapInfo.payload.warpId := U(0, config.warpIdWidth bits)
+  smAdmissionController.io.trapInfo.payload.pc := U(0, config.addressWidth bits)
+  smAdmissionController.io.trapInfo.payload.faultCode := FaultCode.None
 
-  tensorCoreBlock.io.issue.valid := False
-  tensorCoreBlock.io.issue.payload.warpId := selectedWarpIdReg
-  tensorCoreBlock.io.issue.payload.opcode := decodeUnit.io.decoded.opcode
-  tensorCoreBlock.io.issue.payload.activeMask := selectedContextReg.activeMask
-  for (lane <- 0 until config.warpSize) {
-    tensorCoreBlock.io.issue.payload.operandA(lane) := registerFile.io.readDataA(lane)
-    tensorCoreBlock.io.issue.payload.operandB(lane) := registerFile.io.readDataB(lane)
-  }
-  tensorCoreBlock.io.response.ready := engineState === EngineState.WAIT_TENSOR
-
-  io.debug.scheduledWarp.valid := warpScheduler.io.schedule.fire
-  io.debug.scheduledWarp.payload := warpScheduler.io.schedule.payload
-  io.debug.fetchResponse.valid := fetchUnit.io.response.fire
-  io.debug.fetchResponse.payload := fetchUnit.io.response.payload
-  io.debug.decodedInstruction.valid := engineState === EngineState.ISSUE
-  io.debug.decodedInstruction.payload := decodeUnit.io.decoded
+  io.debug.scheduledWarp.valid := False
+  io.debug.scheduledWarp.payload.warpId := U(0, config.warpIdWidth bits)
+  io.debug.scheduledWarp.payload.context := warpStateTable.io.states(0)
+  io.debug.fetchResponse.valid := False
+  io.debug.fetchResponse.payload := subSms(0).io.debug.fetchResponse.payload
+  io.debug.decodedInstruction.valid := False
+  io.debug.decodedInstruction.payload := subSms(0).io.debug.decodedInstruction.payload
   io.debug.writeback.valid := False
-  io.debug.writeback.payload := registerFile.io.write.payload
+  io.debug.writeback.payload := subSms(0).io.debug.writeback.payload
   io.debug.trap.valid := False
-  io.debug.trap.payload.warpId := selectedWarpIdReg
-  io.debug.trap.payload.pc := selectedContextReg.pc
-  io.debug.trap.payload.faultCode := FaultCode.None
-  io.debug.engineState := engineState.asBits.asUInt.resized
-  io.debug.selectedWarpId := selectedWarpIdReg
-  io.debug.selectedPc := selectedContextReg.pc
-  io.debug.fetchMemoryReqValid := fetchUnit.io.memoryReq.valid
-  io.debug.fetchMemoryReqReady := fetchUnit.io.memoryReq.ready
-  io.debug.fetchMemoryRspValid := fetchUnit.io.memoryRsp.valid
-  io.debug.fetchMemoryRspReady := fetchUnit.io.memoryRsp.ready
-  io.debug.lsuIssueValid := loadStoreUnit.io.issue.valid
-  io.debug.lsuResponseValid := loadStoreUnit.io.response.valid
-  io.debug.lsuExternalReqValid := loadStoreUnit.io.externalMemReq.valid
-  io.debug.lsuExternalReqReady := loadStoreUnit.io.externalMemReq.ready
-  io.debug.lsuExternalRspValid := loadStoreUnit.io.externalMemRsp.valid
-  io.debug.lsuExternalRspReady := loadStoreUnit.io.externalMemRsp.ready
+  io.debug.trap.payload := subSms(0).io.debug.trap.payload
+  io.debug.engineState := U(0, 3 bits)
+  io.debug.selectedWarpId := U(0, config.warpIdWidth bits)
+  io.debug.selectedPc := U(0, config.addressWidth bits)
+
+  private val scheduledWarpCandidates = Bits(config.subSmCount bits)
+  private val fetchResponseCandidates = Bits(config.subSmCount bits)
+  private val decodedInstructionCandidates = Bits(config.subSmCount bits)
+  private val writebackCandidates = Bits(config.subSmCount bits)
+  private val trapCandidates = Bits(config.subSmCount bits)
+  private val activeEngineCandidates = Bits(config.subSmCount bits)
+
+  for (subSm <- 0 until config.subSmCount) {
+    io.debug.subSmEngineStates(subSm) := subSms(subSm).io.debug.engineState
+    io.debug.subSmSelectedWarpIds(subSm) := subSms(subSm).io.debug.selectedWarpId
+    io.debug.subSmSelectedPcs(subSm) := subSms(subSm).io.debug.selectedPc
+    io.debug.subSmSlotOccupied(subSm) := subSms(subSm).io.debug.slotOccupied
+    io.debug.subSmBoundWarpIds(subSm) := subSms(subSm).io.debug.boundWarpIds
+    scheduledWarpCandidates(subSm) := subSms(subSm).io.debug.scheduledWarp.valid
+    fetchResponseCandidates(subSm) := subSms(subSm).io.debug.fetchResponse.valid
+    decodedInstructionCandidates(subSm) := subSms(subSm).io.debug.decodedInstruction.valid
+    writebackCandidates(subSm) := subSms(subSm).io.debug.writeback.valid
+    trapCandidates(subSm) := subSms(subSm).io.debug.trap.valid
+    activeEngineCandidates(subSm) := subSms(subSm).io.debug.engineState =/= 0
+  }
+
+  for (subSm <- 0 until config.subSmCount) {
+    val earlierScheduledWarp =
+      if (subSm == 0) False else scheduledWarpCandidates(subSm - 1 downto 0).orR
+    when(scheduledWarpCandidates(subSm) && !earlierScheduledWarp) {
+      io.debug.scheduledWarp.valid := True
+      io.debug.scheduledWarp.payload.warpId := subSms(subSm).io.debug.scheduledWarp.payload.warpId
+      io.debug.scheduledWarp.payload.context := subSms(subSm).io.debug.scheduledWarp.payload.context
+    }
+
+    val earlierFetchResponse =
+      if (subSm == 0) False else fetchResponseCandidates(subSm - 1 downto 0).orR
+    when(fetchResponseCandidates(subSm) && !earlierFetchResponse) {
+      io.debug.fetchResponse.valid := True
+      io.debug.fetchResponse.payload := subSms(subSm).io.debug.fetchResponse.payload
+    }
+
+    val earlierDecodedInstruction =
+      if (subSm == 0) False else decodedInstructionCandidates(subSm - 1 downto 0).orR
+    when(decodedInstructionCandidates(subSm) && !earlierDecodedInstruction) {
+      io.debug.decodedInstruction.valid := True
+      io.debug.decodedInstruction.payload := subSms(subSm).io.debug.decodedInstruction.payload
+    }
+
+    val earlierWriteback =
+      if (subSm == 0) False else writebackCandidates(subSm - 1 downto 0).orR
+    when(writebackCandidates(subSm) && !earlierWriteback) {
+      io.debug.writeback.valid := True
+      io.debug.writeback.payload := subSms(subSm).io.debug.writeback.payload
+    }
+
+    val earlierTrap = if (subSm == 0) False else trapCandidates(subSm - 1 downto 0).orR
+    when(trapCandidates(subSm) && !earlierTrap) {
+      smAdmissionController.io.trapInfo.valid := True
+      smAdmissionController.io.trapInfo.payload := subSms(subSm).io.debug.trap.payload
+      io.debug.trap.valid := True
+      io.debug.trap.payload := subSms(subSm).io.debug.trap.payload
+    }
+
+    val earlierActiveEngine =
+      if (subSm == 0) False else activeEngineCandidates(subSm - 1 downto 0).orR
+    when(activeEngineCandidates(subSm) && !earlierActiveEngine) {
+      io.debug.engineState := subSms(subSm).io.debug.engineState
+      io.debug.selectedWarpId := subSms(subSm).io.debug.selectedWarpId
+      io.debug.selectedPc := subSms(subSm).io.debug.selectedPc
+    }
+  }
+
+  io.debug.fetchMemoryReqValid := l1InstructionCache.io.memoryReq.valid
+  io.debug.fetchMemoryReqReady := l1InstructionCache.io.memoryReq.ready
+  io.debug.fetchMemoryRspValid := l1InstructionCache.io.memoryRsp.valid
+  io.debug.fetchMemoryRspReady := l1InstructionCache.io.memoryRsp.ready
+  io.debug.lsuIssueValid := l1DataSharedMemory.io.sharedMemReq.valid || l1DataSharedMemory.io.memoryReq.valid
+  io.debug.lsuResponseValid := l1DataSharedMemory.io.sharedMemRsp.valid || l1DataSharedMemory.io.memoryRsp.valid
+  io.debug.lsuExternalReqValid := l1DataSharedMemory.io.memoryReq.valid
+  io.debug.lsuExternalReqReady := l1DataSharedMemory.io.memoryReq.ready
+  io.debug.lsuExternalRspValid := l1DataSharedMemory.io.memoryRsp.valid
+  io.debug.lsuExternalRspReady := l1DataSharedMemory.io.memoryRsp.ready
   io.debug.launchInvalidGridDim := smAdmissionController.io.invalidGridDim
   io.debug.launchInvalidBlockDimZero := smAdmissionController.io.invalidBlockDimZero
   io.debug.launchInvalidBlockThreadCount := smAdmissionController.io.invalidBlockThreadCount
   io.debug.launchInvalidSharedBytes := smAdmissionController.io.invalidSharedBytes
   io.debug.launchRequestedBlockThreads := smAdmissionController.io.requestedBlockThreadCount
-
-  private val branchTrueBits = Bits(config.warpSize bits)
-  private val branchFalseBits = Bits(config.warpSize bits)
-  for (lane <- 0 until config.warpSize) {
-    val laneActive = selectedContextReg.activeMask(lane)
-    val cond = Bool()
-    cond := registerFile.io.readDataA(lane) =/= 0
-    when(decodeUnit.io.decoded.branchOnZero) {
-      cond := registerFile.io.readDataA(lane) === 0
-    }
-    branchTrueBits(lane) := laneActive && cond
-    branchFalseBits(lane) := laneActive && !cond
-  }
-
-  private val allWarpTerminal = warpStateTable.io.states.map(context => !context.valid || context.exited || context.faulted).foldLeft(True)(_ && _)
-  smAdmissionController.io.kernelComplete := smAdmissionController.io.executionStatus.busy && engineState === EngineState.IDLE && allWarpTerminal
-  smAdmissionController.io.trapInfo.valid := io.debug.trap.valid
-  smAdmissionController.io.trapInfo.payload := io.debug.trap.payload
-
-  when(warpScheduler.io.schedule.fire) {
-    selectedWarpIdReg := warpScheduler.io.schedule.payload.warpId
-    selectedContextReg := warpScheduler.io.schedule.payload.context
-    updateWriteValid := True
-    updateWriteIndex := warpScheduler.io.schedule.payload.warpId
-    updateWriteContext.valid := warpScheduler.io.schedule.payload.context.valid
-    updateWriteContext.runnable := False
-    updateWriteContext.pc := warpScheduler.io.schedule.payload.context.pc
-    updateWriteContext.activeMask := warpScheduler.io.schedule.payload.context.activeMask
-    updateWriteContext.threadBase := warpScheduler.io.schedule.payload.context.threadBase
-    updateWriteContext.threadBaseX := warpScheduler.io.schedule.payload.context.threadBaseX
-    updateWriteContext.threadBaseY := warpScheduler.io.schedule.payload.context.threadBaseY
-    updateWriteContext.threadBaseZ := warpScheduler.io.schedule.payload.context.threadBaseZ
-    updateWriteContext.threadCount := warpScheduler.io.schedule.payload.context.threadCount
-    updateWriteContext.outstanding := True
-    updateWriteContext.exited := warpScheduler.io.schedule.payload.context.exited
-    updateWriteContext.faulted := warpScheduler.io.schedule.payload.context.faulted
-    engineState := EngineState.WAIT_FETCH
-  }
-
-  fetchUnit.io.response.ready := engineState === EngineState.WAIT_FETCH
-  when(fetchUnit.io.response.fire) {
-    when(fetchUnit.io.response.payload.fault) {
-      updateWriteValid := True
-      updateWriteContext.runnable := False
-      updateWriteContext.outstanding := False
-      updateWriteContext.faulted := True
-      io.debug.trap.valid := True
-      io.debug.trap.payload.warpId := selectedWarpIdReg
-      io.debug.trap.payload.pc := fetchUnit.io.response.payload.pc
-      io.debug.trap.payload.faultCode := fetchUnit.io.response.payload.faultCode
-      engineState := EngineState.IDLE
-    } otherwise {
-      instructionReg := fetchUnit.io.response.payload.instruction
-      engineState := EngineState.ISSUE
-    }
-  }
-
-  when(engineState === EngineState.ISSUE) {
-    when(decodeUnit.io.decoded.illegal) {
-      updateWriteValid := True
-      updateWriteContext.runnable := False
-      updateWriteContext.outstanding := False
-      updateWriteContext.faulted := True
-      io.debug.trap.valid := True
-      io.debug.trap.payload.faultCode := FaultCode.IllegalOpcode
-      engineState := EngineState.IDLE
-    } elsewhen (decodeUnit.io.decoded.isTrap) {
-      updateWriteValid := True
-      updateWriteContext.runnable := False
-      updateWriteContext.outstanding := False
-      updateWriteContext.faulted := True
-      io.debug.trap.valid := True
-      io.debug.trap.payload.faultCode := FaultCode.Trap
-      engineState := EngineState.IDLE
-    } elsewhen (decodeUnit.io.decoded.isExit) {
-      updateWriteValid := True
-      updateWriteContext.pc := advancePc
-      updateWriteContext.runnable := False
-      updateWriteContext.outstanding := False
-      updateWriteContext.exited := True
-      engineState := EngineState.IDLE
-    } elsewhen (decodeUnit.io.decoded.isBranch) {
-      val nonUniform = branchTrueBits.orR && branchFalseBits.orR
-      updateWriteValid := True
-      updateWriteContext.outstanding := False
-
-      when(decodeUnit.io.decoded.opcode === B(Opcode.BRA, 8 bits)) {
-        updateWriteContext.pc := branchTarget
-        updateWriteContext.runnable := True
-        engineState := EngineState.IDLE
-      } elsewhen (nonUniform) {
-        updateWriteContext.runnable := False
-        updateWriteContext.faulted := True
-        io.debug.trap.valid := True
-        io.debug.trap.payload.faultCode := FaultCode.NonUniformBranch
-        engineState := EngineState.IDLE
-      } otherwise {
-        updateWriteContext.pc := advancePc
-        when(branchTrueBits.orR) {
-          updateWriteContext.pc := branchTarget
-        }
-        updateWriteContext.runnable := True
-        engineState := EngineState.IDLE
-      }
-    } elsewhen (decodeUnit.io.decoded.isS2r) {
-      registerFile.io.write.valid := decodeUnit.io.decoded.writesRd
-      registerFile.io.write.payload.warpId := selectedWarpIdReg
-      registerFile.io.write.payload.rd := decodeUnit.io.decoded.rd
-      registerFile.io.write.payload.writeMask := selectedContextReg.activeMask
-      for (lane <- 0 until config.warpSize) {
-        registerFile.io.write.payload.data(lane) := specialValues(lane).asBits
-      }
-      io.debug.writeback.valid := decodeUnit.io.decoded.writesRd
-      io.debug.writeback.payload := registerFile.io.write.payload
-
-      updateWriteValid := True
-      updateWriteContext.pc := advancePc
-      updateWriteContext.runnable := True
-      updateWriteContext.outstanding := False
-      engineState := EngineState.IDLE
-    } elsewhen (decodeUnit.io.decoded.target === ExecutionUnitKind.CUDA) {
-      cudaCoreArray.io.issue.valid := True
-      when(cudaCoreArray.io.issue.ready) {
-        engineState := EngineState.WAIT_CUDA
-      }
-    } elsewhen (decodeUnit.io.decoded.target === ExecutionUnitKind.LSU) {
-      loadStoreUnit.io.issue.valid := True
-      when(loadStoreUnit.io.issue.ready) {
-        engineState := EngineState.WAIT_LSU
-      }
-    } elsewhen (decodeUnit.io.decoded.target === ExecutionUnitKind.SFU) {
-      specialFunctionUnit.io.issue.valid := True
-      when(specialFunctionUnit.io.issue.ready) {
-        engineState := EngineState.WAIT_SFU
-      }
-    } elsewhen (decodeUnit.io.decoded.target === ExecutionUnitKind.TENSOR) {
-      tensorCoreBlock.io.issue.valid := True
-      when(tensorCoreBlock.io.issue.ready) {
-        engineState := EngineState.WAIT_TENSOR
-      }
-    } otherwise {
-      updateWriteValid := True
-      updateWriteContext.pc := advancePc
-      updateWriteContext.runnable := True
-      updateWriteContext.outstanding := False
-      engineState := EngineState.IDLE
-    }
-  }
-
-  when(cudaCoreArray.io.response.fire) {
-    registerFile.io.write.valid := decodeUnit.io.decoded.writesRd
-    registerFile.io.write.payload.warpId := selectedWarpIdReg
-    registerFile.io.write.payload.rd := decodeUnit.io.decoded.rd
-    registerFile.io.write.payload.writeMask := selectedContextReg.activeMask
-    registerFile.io.write.payload.data := cudaCoreArray.io.response.payload.result
-    io.debug.writeback.valid := decodeUnit.io.decoded.writesRd
-    io.debug.writeback.payload := registerFile.io.write.payload
-
-    updateWriteValid := True
-    updateWriteContext.pc := advancePc
-    updateWriteContext.runnable := True
-    updateWriteContext.outstanding := False
-    engineState := EngineState.IDLE
-  }
-
-  when(loadStoreUnit.io.response.fire) {
-    when(loadStoreUnit.io.response.payload.error) {
-      updateWriteValid := True
-      updateWriteContext.runnable := False
-      updateWriteContext.outstanding := False
-      updateWriteContext.faulted := True
-      io.debug.trap.valid := True
-      io.debug.trap.payload.faultCode := loadStoreUnit.io.response.payload.faultCode
-    } otherwise {
-      registerFile.io.write.valid := decodeUnit.io.decoded.isLoad
-      registerFile.io.write.payload.warpId := selectedWarpIdReg
-      registerFile.io.write.payload.rd := decodeUnit.io.decoded.rd
-      registerFile.io.write.payload.writeMask := selectedContextReg.activeMask
-      registerFile.io.write.payload.data := loadStoreUnit.io.response.payload.readData
-      io.debug.writeback.valid := decodeUnit.io.decoded.isLoad
-      io.debug.writeback.payload := registerFile.io.write.payload
-
-      updateWriteValid := True
-      updateWriteContext.pc := advancePc
-      updateWriteContext.runnable := True
-      updateWriteContext.outstanding := False
-    }
-    engineState := EngineState.IDLE
-  }
-
-  when(specialFunctionUnit.io.response.fire) {
-    registerFile.io.write.valid := decodeUnit.io.decoded.writesRd
-    registerFile.io.write.payload.warpId := selectedWarpIdReg
-    registerFile.io.write.payload.rd := decodeUnit.io.decoded.rd
-    registerFile.io.write.payload.writeMask := selectedContextReg.activeMask
-    registerFile.io.write.payload.data := specialFunctionUnit.io.response.payload.result
-    io.debug.writeback.valid := decodeUnit.io.decoded.writesRd
-    io.debug.writeback.payload := registerFile.io.write.payload
-
-    updateWriteValid := True
-    updateWriteContext.pc := advancePc
-    updateWriteContext.runnable := True
-    updateWriteContext.outstanding := False
-    engineState := EngineState.IDLE
-  }
-
-  when(tensorCoreBlock.io.response.fire) {
-    registerFile.io.write.valid := decodeUnit.io.decoded.writesRd
-    registerFile.io.write.payload.warpId := selectedWarpIdReg
-    registerFile.io.write.payload.rd := decodeUnit.io.decoded.rd
-    registerFile.io.write.payload.writeMask := selectedContextReg.activeMask
-    registerFile.io.write.payload.data := tensorCoreBlock.io.response.payload.result
-    io.debug.writeback.valid := decodeUnit.io.decoded.writesRd
-    io.debug.writeback.payload := registerFile.io.write.payload
-
-    updateWriteValid := True
-    updateWriteContext.pc := advancePc
-    updateWriteContext.runnable := True
-    updateWriteContext.outstanding := False
-    engineState := EngineState.IDLE
-  }
 }

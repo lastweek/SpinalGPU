@@ -23,7 +23,26 @@ lazy val root = (project in file("."))
       scalaTest
     ),
     Compile / run / mainClass := Some("spinalgpu.GenerateGpuTop"),
+    Test / fork := true,
+    Test / javaOptions ++= Seq(
+      "-Xms1024m",
+      "-Xmx4096m",
+      "-Xss4M",
+      "-XX:ReservedCodeCacheSize=128m"
+    ),
     Test / parallelExecution := false,
+    Test / testGrouping := {
+      val options = ForkOptions()
+        .withRunJVMOptions((Test / javaOptions).value.toVector)
+        .withWorkingDirectory(baseDirectory.value)
+      (Test / definedTests).value.map { test =>
+        Tests.Group(
+          name = test.name,
+          tests = Seq(test),
+          runPolicy = Tests.SubProcess(options)
+        )
+      }
+    },
     buildKernelCorpus := Def.taskDyn {
       (Compile / runMain).toTask(" spinalgpu.toolchain.BuildKernelCorpus")
     }.value,

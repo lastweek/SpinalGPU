@@ -5,17 +5,16 @@ flowchart LR
   HCB[HostControlBlock]
   SAC[SmAdmissionController]
   WST[WarpStateTable]
-  SCH[WarpScheduler]
-  IFU[InstructionFetchUnit]
-  DEC[DecodeUnit]
-  RF[WarpRegisterFile]
-  EXEC[CUDA / LSU / SFU / Tensor]
+  BINDER[WarpBinder]
+  SUBS[4 x SubSmPartition]
+  L0I[4 x L0 Instruction Cache]
+  L1I[L1InstructionCache]
+  L1D[L1DataSharedMemory]
   MEM[Unified External Memory]
 
   HOST --> CSR --> GPU
   GPU --> HCB --> SAC --> WST
-  WST --> SCH --> IFU --> DEC --> RF --> EXEC
-  IFU --> MEM
-  EXEC --> MEM
-  EXEC --> RF
-  EXEC --> WST
+  WST --> BINDER --> SUBS
+  SUBS --> L0I --> L1I --> MEM
+  SUBS --> L1D --> MEM
+  SUBS --> WST

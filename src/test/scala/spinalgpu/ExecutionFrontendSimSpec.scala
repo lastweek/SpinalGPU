@@ -7,12 +7,27 @@ import spinal.lib.bus.amba4.axi.sim._
 import spinal.lib.bus.amba4.axilite.sim._
 import spinalgpu.toolchain.KernelCorpus
 
-// Low-level AXI-Lite and top-level boundary checks stay in dedicated specs.
-// This suite reuses the shared corpus runner for ignored GpuTop execution smoke cases.
-class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
-  private val config = SmConfig.default
+abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
+  protected val config: SmConfig = SmConfig.default
 
-  private def runGpuTopKernelCaseWithoutHarnessGate(kernel: KernelCorpus.KernelCase): Unit = {
+  protected def waitForGpuTopCompletionSignal(dut: GpuTop, kernel: KernelCorpus.KernelCase): Unit = {
+    var cycles = 0
+    while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
+      dut.coreClockDomain.waitSampling()
+      cycles += 1
+    }
+
+    assert(
+      dut.io.debugExecutionStatus.done.toBoolean,
+      s"${kernel.name} did not complete after $cycles cycles; " +
+        s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
+        s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
+        s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
+        f"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
+    )
+  }
+
+  protected def runGpuTopKernelCaseWithoutHarnessGate(kernel: KernelCorpus.KernelCase): Unit = {
     SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
       dut.coreClockDomain.assertReset()
@@ -26,7 +41,8 @@ class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
 
       KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
       ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
-      ExecutionTestUtils.waitForExecutionComplete(hostControl, dut.coreClockDomain, timeoutCycles = kernel.timeoutCycles)
+      waitForGpuTopCompletionSignal(dut, kernel)
+      dut.coreClockDomain.waitSampling(8)
 
       dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
       kernel.expectation match {
@@ -39,21 +55,21 @@ class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
       memory.stop()
     }
   }
+}
 
-  KernelCorpus.gpuTopCases.foreach { kernel =>
-    ignore(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
-      KernelCorpusTestUtils.runGpuTopKernelCase(kernel, config)
-    }
-  }
-
+class MatrixAddF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("matrix_add_f32 executes through GpuTop") {
     KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixAddF32, config)
   }
+}
 
+class MatrixMulF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("matrix_mul_f32 executes through GpuTop") {
     runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.matrixMulF32)
   }
+}
 
+class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("grid_id_store increments across successive GpuTop command submissions") {
     val kernel = KernelCorpus.gridIdStore
 
@@ -88,6 +104,7 @@ class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
 
       ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
       waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      dut.coreClockDomain.waitSampling(8)
       dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(0)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
@@ -97,11 +114,20 @@ class ExecutionFrontendSimSpec extends AnyFunSuite with Matchers {
 
       ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
       waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      dut.coreClockDomain.waitSampling(8)
       dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(1)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
 
       memory.stop()
+    }
+  }
+}
+
+class ExecutionFrontendSuiteContractSpec extends AnyFunSuite with Matchers {
+  KernelCorpus.gpuTopCases.foreach { kernel =>
+    ignore(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
+      KernelCorpusTestUtils.runGpuTopKernelCase(kernel, SmConfig.default)
     }
   }
 

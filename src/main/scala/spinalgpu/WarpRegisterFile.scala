@@ -3,7 +3,9 @@ package spinalgpu
 import spinal.core._
 import spinal.lib._
 
-class WarpRegisterFile(config: SmConfig) extends Component {
+class WarpRegisterFile(config: SmConfig, slotCount: Int = -1) extends Component {
+  private val effectiveSlotCount = if (slotCount > 0) slotCount else config.residentWarpCount
+
   val io = new Bundle {
     val readWarpId = in(UInt(config.warpIdWidth bits))
     val readAddrA = in(UInt(config.registerAddressWidth bits))
@@ -17,12 +19,17 @@ class WarpRegisterFile(config: SmConfig) extends Component {
   }
 
   private val file =
-    Vec.fill(config.residentWarpCount)(Vec.fill(config.warpSize)(Vec.fill(config.registerCount)(Reg(UInt(config.dataWidth bits)) init (0))))
+    Vec.fill(effectiveSlotCount)(Vec.fill(config.warpSize)(Vec.fill(config.registerCount)(Reg(UInt(config.dataWidth bits)) init (0))))
 
   when(io.clearWarp.valid) {
     for (lane <- 0 until config.warpSize) {
       for (reg <- 0 until config.registerCount) {
-        file(io.clearWarp.payload)(lane)(reg) := U(0, config.dataWidth bits)
+        if (effectiveSlotCount == 1) {
+          file(0)(lane)(reg) := U(0, config.dataWidth bits)
+        } else {
+          val clearIndex = io.clearWarp.payload.resize(log2Up(effectiveSlotCount max 2))
+          file(clearIndex)(lane)(reg) := U(0, config.dataWidth bits)
+        }
       }
     }
   }
@@ -30,7 +37,12 @@ class WarpRegisterFile(config: SmConfig) extends Component {
   when(io.write.valid && io.write.payload.rd =/= 0) {
     for (lane <- 0 until config.warpSize) {
       when(io.write.payload.writeMask(lane)) {
-        file(io.write.payload.warpId)(lane)(io.write.payload.rd) := io.write.payload.data(lane).asUInt
+        if (effectiveSlotCount == 1) {
+          file(0)(lane)(io.write.payload.rd) := io.write.payload.data(lane).asUInt
+        } else {
+          val writeIndex = io.write.payload.warpId.resize(log2Up(effectiveSlotCount max 2))
+          file(writeIndex)(lane)(io.write.payload.rd) := io.write.payload.data(lane).asUInt
+        }
       }
     }
   }
@@ -41,15 +53,30 @@ class WarpRegisterFile(config: SmConfig) extends Component {
     io.readDataC(lane) := U(0, config.dataWidth bits)
 
     when(io.readAddrA =/= 0) {
-      io.readDataA(lane) := file(io.readWarpId)(lane)(io.readAddrA)
+      if (effectiveSlotCount == 1) {
+        io.readDataA(lane) := file(0)(lane)(io.readAddrA)
+      } else {
+        val readIndex = io.readWarpId.resize(log2Up(effectiveSlotCount max 2))
+        io.readDataA(lane) := file(readIndex)(lane)(io.readAddrA)
+      }
     }
 
     when(io.readAddrB =/= 0) {
-      io.readDataB(lane) := file(io.readWarpId)(lane)(io.readAddrB)
+      if (effectiveSlotCount == 1) {
+        io.readDataB(lane) := file(0)(lane)(io.readAddrB)
+      } else {
+        val readIndex = io.readWarpId.resize(log2Up(effectiveSlotCount max 2))
+        io.readDataB(lane) := file(readIndex)(lane)(io.readAddrB)
+      }
     }
 
     when(io.readAddrC =/= 0) {
-      io.readDataC(lane) := file(io.readWarpId)(lane)(io.readAddrC)
+      if (effectiveSlotCount == 1) {
+        io.readDataC(lane) := file(0)(lane)(io.readAddrC)
+      } else {
+        val readIndex = io.readWarpId.resize(log2Up(effectiveSlotCount max 2))
+        io.readDataC(lane) := file(readIndex)(lane)(io.readAddrC)
+      }
     }
   }
 }

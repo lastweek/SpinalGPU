@@ -5,7 +5,13 @@ import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
 
 class WarpRegisterFileSpec extends AnyFunSuite with Matchers {
-  private val config = SmConfig(warpSize = 8, residentWarpCount = 2, registerCount = 32)
+  private val config = SmConfig(
+    warpSize = 8,
+    subSmCount = 1,
+    residentWarpsPerSubSm = 2,
+    subSmIssueWidth = 8,
+    registerCount = 32
+  )
   private lazy val compiled = SimConfig.withVerilator.compile(new WarpRegisterFile(config))
 
   private def pattern(warpId: Int, reg: Int, lane: Int): BigInt =
@@ -33,6 +39,7 @@ class WarpRegisterFileSpec extends AnyFunSuite with Matchers {
     dut.io.readWarpId #= 0
     dut.io.readAddrA #= 0
     dut.io.readAddrB #= 0
+    dut.io.readAddrC #= 0
     dut.io.write.valid #= false
     dut.io.write.payload.warpId #= 0
     dut.io.write.payload.rd #= 0

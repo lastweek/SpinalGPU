@@ -1,13 +1,15 @@
 flowchart LR
-  LSU[LoadStoreUnit]
+  SUBS[4 x SubSm LSU / IFU]
+  L0I[4 x L0 Instruction Cache]
+  L1I[L1InstructionCache]
+  L1D[L1DataSharedMemory]
   SHMEM[SharedMemory]
-  EXREQ[ExternalMemReq/Rsp]
+  ARB[ExternalMemoryArbiter]
   AXIADAPT[ExternalMemoryAxiAdapter]
   AXI[AXI4 Master Port]
   MEM[External Memory Model / Controller]
 
-  LSU --> SHMEM
-  LSU --> EXREQ
-  EXREQ --> AXIADAPT
-  AXIADAPT --> AXI
-  AXI --> MEM
+  SUBS --> L0I --> L1I --> ARB
+  SUBS --> L1D --> SHMEM
+  L1D --> ARB
+  ARB --> AXIADAPT --> AXI --> MEM
