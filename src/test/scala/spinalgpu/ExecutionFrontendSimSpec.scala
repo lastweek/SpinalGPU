@@ -77,6 +77,12 @@ class MatrixAddF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   }
 }
 
+class VectorAddF32x4GpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  test("vector_add_f32x4 executes through GpuTop") {
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.vectorAddF32x4, config)
+  }
+}
+
 class MatrixMulF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("matrix_mul_f32 executes through GpuTop") {
     runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.matrixMulF32)

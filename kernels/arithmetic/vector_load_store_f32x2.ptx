@@ -1,0 +1,61 @@
+// Purpose: Round-trip one FP32 float2 tuple per thread through global memory.
+// Primary feature: global_memory
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread owns one float2 tuple.
+// - The kernel computes a tuple-sized byte offset from %tid.x, loads one .v2.f32 tuple
+//   from the input array, and stores the same tuple to the output array.
+// - No arithmetic is performed; this isolates PTX vector tuple movement.
+//
+// Where this fits:
+// - This is the smallest direct proof that SpinalGPU accepts PTX vector brace tuples.
+// - It demonstrates that vector PTX in this repo is frontend syntax lowered onto the
+//   existing scalar FP32 register file and global-memory datapath.
+//
+// Key model details:
+// - One logical tuple is 8 bytes because it contains two FP32 elements.
+// - %tid.x selects which float2 tuple a thread owns.
+// - ld.global.v2.f32 and st.global.v2.f32 are lowered element-wise to two scalar
+//   32-bit global-memory operations each.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_load_store_f32x2(const float2* in, float2* out) {
+//   unsigned idx = threadIdx.x;
+//   out[idx] = in[idx];
+// }
+//
+// SpinalGPU note:
+// - The tuple syntax is PTX frontend sugar only. The hardware still moves two scalar
+//   FP32 values through the existing scalar load/store and register paths.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_load_store_f32x2(
+    .param .u32 in_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<6>;
+    .reg .f32 %f<2>;
+
+    // Setup
+    // Load the input/output base pointers and use %tid.x as the tuple index.
+    ld.param.u32 %r0, [in_ptr];
+    ld.param.u32 %r1, [out_ptr];
+    mov.u32 %r2, %tid.x;
+
+    // Core
+    // Convert the float2 tuple index into a byte offset: 2 elements * 4 bytes = 8 bytes.
+    shl.b32 %r3, %r2, 3;
+    add.u32 %r4, %r0, %r3;
+    add.u32 %r5, %r1, %r3;
+
+    // Load one float2 tuple and store it back unchanged.
+    ld.global.v2.f32 {%f0, %f1}, [%r4];
+    st.global.v2.f32 [%r5], {%f0, %f1};
+
+    // Exit
+    ret;
+}

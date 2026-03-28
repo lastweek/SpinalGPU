@@ -1,0 +1,60 @@
+// Purpose: Round-trip one FP32 float4 tuple per thread through global memory.
+// Primary feature: global_memory
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread owns one float4 tuple.
+// - The kernel computes a tuple-sized byte offset from %tid.x, loads one .v4.f32 tuple,
+//   and stores the same four FP32 elements back to the output array.
+// - This is the widest vector tuple currently accepted by the PTX frontend.
+//
+// Where this fits:
+// - This is the direct teaching kernel for float4 tuple movement.
+// - It proves that .v4.f32 reuses the same scalar FP32 datapath without adding any
+//   native vector machine opcodes.
+//
+// Key model details:
+// - One logical tuple is 16 bytes because it contains four FP32 elements.
+// - %tid.x selects the float4 tuple index, not an individual scalar element.
+// - The tuple load/store lower to four ordered scalar 32-bit global-memory operations.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_load_store_f32x4(const float4* in, float4* out) {
+//   unsigned idx = threadIdx.x;
+//   out[idx] = in[idx];
+// }
+//
+// SpinalGPU note:
+// - PTX vector movement does not imply packed SIMD hardware here. The frontend expands
+//   each float4 move into four scalar machine-level FP32 transfers.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_load_store_f32x4(
+    .param .u32 in_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<6>;
+    .reg .f32 %f<4>;
+
+    // Setup
+    // Load the input/output base pointers and use %tid.x as the float4 tuple index.
+    ld.param.u32 %r0, [in_ptr];
+    ld.param.u32 %r1, [out_ptr];
+    mov.u32 %r2, %tid.x;
+
+    // Core
+    // Convert the float4 tuple index into bytes: 4 elements * 4 bytes = 16 bytes.
+    shl.b32 %r3, %r2, 4;
+    add.u32 %r4, %r0, %r3;
+    add.u32 %r5, %r1, %r3;
+
+    // Load one float4 tuple and store it back unchanged.
+    ld.global.v4.f32 {%f0, %f1, %f2, %f3}, [%r4];
+    st.global.v4.f32 [%r5], {%f0, %f1, %f2, %f3};
+
+    // Exit
+    ret;
+}

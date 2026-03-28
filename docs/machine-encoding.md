@@ -73,6 +73,7 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and t
 - `r0` is hardwired to zero
 - Registers are per-thread, not per-warp
 - PTX `%r<N>` and `%f<N>` namespaces both lower onto this same 32-bit physical register file
+- PTX vector brace tuples such as `{%f0, %f1, %f2, %f3}` reuse those same scalar `%f<N>` registers; there is no dedicated vector register file
 - Internal special registers:
   - `%tid.x`
   - `%tid.y`
@@ -102,5 +103,6 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and t
 - `fadd`, `fmul`, `ffma`, `fsub`, `fabs`, `fneg`, `fseteq`, `fsetlt`, and `sel` execute on the CUDA-core datapath.
 - `ffma` and `sel` are the current users of the `RRRR` format.
 - PTX `fma.rn.f32` lowers to machine `ffma`, but the current repo implementation computes it as FP32 multiply followed by FP32 add rather than a single-round fused IEEE FMA.
+- PTX `mov.v2/v4.f32`, `ld.global.v2/v4.f32`, and `st.global.v2/v4.f32` are frontend tuple spellings only. They lower into repeated scalar `mov`, `ldg`, and `stg` machine instructions, so no dedicated vector opcode exists.
 - `ldg` and `stg` are typeless 32-bit machine-memory ops. PTX `.u32`, `.f32`, and the narrow lowered `%gridid` `.u64` path all reuse them.
 - Instruction fetch remains single-word. Global LSU traffic is burst-capable and coalesces contiguous active-lane 32-bit accesses into multi-beat requests up to `cudaLaneCount` beats.

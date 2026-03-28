@@ -34,6 +34,7 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `PA8` | `PtxAssemblerSpec`: lowers scalar integer bitwise ops, signed compare, and `selp.u32` |
 | `PA9` | `PtxAssemblerSpec`: lowers scalar FP compare/select and unary FP ops |
 | `PA10` | `PtxAssemblerSpec`: lowers `min/max` convenience ops and `mad.lo.u32` |
+| `PA11` | `PtxAssemblerSpec`: lowers `.v2/.v4 .f32` tuple `mov/ld/st.global` and rejects malformed vector tuples |
 | `KM1` | `KernelCorpusSpec`: kernel corpus references every `.ptx` file exactly once and generated binaries exist |
 | `KM2` | `KernelCorpusSpec`: kernel corpus metadata is complete and expectation types match teaching levels |
 | `KM3` | `KernelCorpusSpec`: PTX headers match declarative metadata and follow the teaching template |
@@ -60,11 +61,15 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `SM17` | `StreamingMultiprocessorKernelCorpusSpec`: `linear_bias_relu_f32` completes and writes expected dense-layer outputs |
 | `SM18` | `StreamingMultiprocessorKernelCorpusSpec`: `hinge_step_f32` completes and writes expected hinge-loss terms |
 | `SM19` | `StreamingMultiprocessorKernelCorpusSpec`: `bitops_pack_u32` completes and writes expected bit-manipulation results |
+| `SM20` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_load_store_f32x2` completes and round-trips FP32 float2 tuples |
+| `SM21` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_load_store_f32x4` completes and round-trips FP32 float4 tuples |
+| `SM22` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_add_f32x4` completes and writes expected float4 sums |
 | `GT1` | `GpuTopSimSpec`: `GpuTop` exposes idle AXI memory and AXI-Lite control boundaries |
 | `GT2` | `ExecutionFrontendSimSpec`: `grid_id_store` increments across successive `GpuTop` launches |
 | `GT3` | `ExecutionFrontendSimSpec`: `matrix_add_f32` executes through `GpuTop` and writes expected FP32 output |
 | `GT4` | `ExecutionFrontendSimSpec`: `matrix_mul_f32` executes through `GpuTop` and writes expected FP32 output |
 | `GT5` | `ExecutionFrontendSimSpec`: `linear_bias_relu_f32` executes through `GpuTop` and writes expected dense-layer output |
+| `GT6` | `ExecutionFrontendSimSpec`: `vector_add_f32x4` executes through `GpuTop` and writes expected float4 output |
 
 ## Compatibility Summary
 
@@ -72,11 +77,11 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | --- | --- | --- | --- |
 | Execution and launch model | `Partial` | `Direct` | Classic SIMT v1 on one SM, one block per launch, full 3D block-shape ABI, no divergent reconvergence support |
 | Module and entry contract | `Partial` | `Direct` | One `.visible .entry` per file, `.param .u32` only |
-| Types, registers, and predicates | `Partial` | `Direct` | `.u32` and `.f32` share one physical 32-bit register pool; `%gridid` remains the only narrow public `.u64` path |
+| Types, registers, and predicates | `Partial` | `Direct` | `.u32` and `.f32` share one physical 32-bit register pool; PTX vector tuples reuse `%f` registers; `%gridid` remains the only narrow public `.u64` path |
 | Special registers | `Partial` | `Direct` | `tid/ntid/ctaid/nctaid.{x,y,z}` plus core SIMT/SM builtins are covered directly; `%gridid` remains a narrow `.u64` path |
-| Instruction surface | `Partial` | `Direct` | Integer, control, FP32 CUDA-core ops, and narrow `.u64` data movement are implemented for the documented subset |
-| Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only; aligned 32-bit words, FP32 global traffic, coalesced bursts, plus lowered `st.global.u64` |
-| Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, FP beyond the narrow `.f32` subset, SFU, tensor, sync, atomics, calls, and broad compiler-generated PTX remain out of scope |
+| Instruction surface | `Partial` | `Direct` | Integer, control, FP32 CUDA-core ops, PTX vector `.v2/.v4 .f32` tuple movement, and narrow `.u64` data movement are implemented for the documented subset |
+| Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only; aligned 32-bit words, FP32 global traffic, coalesced bursts, PTX vector tuple loads/stores lowered element-wise, plus lowered `st.global.u64` |
+| Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, FP beyond the narrow `.f32` subset, packed/vector ALU beyond tuple movement, SFU, tensor, sync, atomics, calls, and broad compiler-generated PTX remain out of scope |
 
 ## Execution And Launch Model
 
@@ -107,12 +112,13 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | --- | --- | --- | --- | --- | --- |
 | `.reg .u32` | PTX virtual registers for typed scalar values | `Implemented` | `Direct` | `PA1`, `KM3` | `.reg .u32 %r<N>;` declarations are accepted. |
 | `.reg .f32` | PTX virtual registers for FP32 scalar values | `Implemented` | `Direct` | `PA7`, `SM14`, `SM15`, `GT3`, `GT4` | `.reg .f32 %f<N>;` declarations are accepted and allocate from the same physical 32-bit register file as `%r<N>`. |
+| PTX vector brace tuples over `%f<N>` registers | PTX may spell `.v2/.v4 .f32` data movement with register tuples | `Partial` | `Direct` | `PA11`, `SM20`, `SM21`, `SM22`, `GT6` | Tuple operands such as `{%f0, %f1, %f2, %f3}` are accepted only for `.v2/.v4 .f32` `mov/ld/st.global`. There is no `.reg .v2/.v4` declaration family. |
 | `.reg .u64` | PTX virtual registers for 64-bit scalar values | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `%gridid` materialization and `st.global.u64`; `.u64` arithmetic and loads remain unsupported. |
 | 32-bit scalar integer execution | A backend must provide typed scalar integer execution for the supported subset | `Implemented` | `Direct` | `SM4`, `SM5`, `SM7`, `SM14`, `SM15` | Integer address arithmetic, loop control, predicates, and shared/global indexing execute on the CUDA-core integer path. |
 | 32-bit scalar FP execution | A backend must provide typed FP32 execution for the supported subset | `Implemented` | `Direct` | `CU1`, `CU2`, `SM14`, `SM15`, `SM16`, `SM17`, `SM18`, `GT3`, `GT4`, `GT5` | `add.f32`, `mul.f32`, `sub.f32`, `neg.f32`, `abs.f32`, ordered `setp.*.f32`, `selp.f32`, and PTX `fma.rn.f32` are implemented on the CUDA-core path. The current `fma.rn.f32` lowering is a three-source multiply-add, not a single-round fused IEEE FMA. |
 | `.pred` support | PTX uses predicate registers for condition evaluation and branch predication | `Partial` | `Direct` | `PA2`, `SM5`, `SM10` | Predicates lower to compiler-managed integer-backed condition values, not a native PTX-style predicate register file. |
 | Wider and alternate integer widths beyond the narrow `%gridid` path (`.s64`, general `.u64`, `.u16`, `.u8`) | PTX supports multiple integer widths | `Rejected` | `Direct` | `PA4` | General non-`%gridid` wider integer support is still rejected by the frontend. |
-| Floating-point families beyond the narrow FP32 subset (`.f64`, conversions, unordered compares, vector and packed/tensor formats) | PTX supports broader scalar FP, vector, and packed element types | `Rejected` | `Direct` | `PA4` | Only scalar `.f32` register values and the explicit FP32 instruction subset documented below are accepted in v1. |
+| Floating-point families beyond the narrow FP32 subset (`.f64`, conversions, unordered compares, vector register types, and packed/tensor formats) | PTX supports broader scalar FP, vector, and packed element types | `Rejected` | `Direct` | `PA4` | Only scalar `.f32` register values plus the explicit `.v2/.v4 .f32` tuple data-movement spellings documented below are accepted in v1. |
 
 ## Special Registers
 
@@ -132,6 +138,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | --- | --- | --- | --- | --- | --- |
 | `mov.u32` | Register moves, immediates, and builtin reads for scalar integer code | `Implemented` | `Direct` | `PA2`, `SM3`, `SM4` | Supports register, immediate, supported special-register, and shared-symbol source forms. |
 | `mov.f32` | Register moves and immediate zero materialization for FP32 code | `Partial` | `Direct` | `PA7`, `SM14`, `SM15` | Supports register-to-register moves and `mov.f32 %fX, 0f00000000`. Other float literal spellings remain rejected. |
+| `mov.v2.f32`, `mov.v4.f32` | PTX tuple move across existing `%f` registers | `Partial` | `Direct` | `PA11`, `SM20`, `SM21`, `SM22` | Supported only with brace tuples over `%f` registers. The assembler lowers each tuple move into ordered scalar `mov.f32` machine operations. |
 | `mov.u64` | 64-bit move for narrow builtin materialization | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `mov.u64 %rdX, %gridid`. Other `.u64` move forms are rejected. |
 | `add.u32` | Integer add in the scalar ALU path | `Implemented` | `Direct` | `SM4`, `SM5`, `SM7` | Register and immediate RHS forms are accepted. |
 | `sub.u32` | Integer subtract in the scalar ALU path | `Implemented` | `None` | none | Parsed and lowered to machine `sub`, but no current test exercises it directly. |
@@ -161,6 +168,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | `.param` plus `ld.param.u32` | Entry parameters must be addressable through the PTX parameter state space | `Partial` | `Direct` | `PA1`, `SM3`-`SM7` | Only entry-scope `.param .u32` is supported. It lowers onto the host-provided `ARG_BASE` buffer. |
 | `.global` plus `ld.global.u32` / `st.global.u32` | PTX global memory loads and stores | `Partial` | `Direct` | `SM3`, `SM4`, `SM5`, `SM7`, `SM9`, `LSU1`, `AXI1` | Only aligned 32-bit word accesses are supported. Misaligned accesses fault. Contiguous active-lane accesses coalesce into burst traffic on the external-memory path. |
 | `.global` plus `ld.global.f32` / `st.global.f32` | PTX global FP32 loads and stores | `Implemented` | `Direct` | `PA7`, `SM14`, `SM15`, `GT3`, `GT4`, `LSU1`, `AXI1` | FP32 global traffic reuses the same aligned 32-bit global-memory path as integers; element type lives in the PTX register namespace, not the LSU opcode. |
+| `.global` plus `ld.global.v2/v4.f32` / `st.global.v2/v4.f32` | PTX vector tuple loads and stores over FP32 elements | `Partial` | `Direct` | `PA11`, `SM20`, `SM21`, `SM22`, `GT6`, `LSU1`, `AXI1` | Accepted only for `.v2/.v4 .f32` brace tuples. The assembler lowers them into ordered scalar `ld.global.f32` / `st.global.f32` operations, so alignment remains 4 bytes per element rather than a dedicated 8/16-byte machine transaction. |
 | `st.global.u64` | PTX may store 64-bit values to global memory | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `%gridid`-backed `.u64` registers. The assembler lowers it to two ordered `st.global.u32` machine stores. |
 | `.shared` declarations plus `ld.shared.u32` / `st.shared.u32` | PTX shared memory declarations and accesses | `Partial` | `Direct` | `PA3`, `SM6` | Declarations use `.shared .align N .b8 name[bytes];`. Execution supports 32-bit word accesses only. |
 | Byte-addressed addresses with aligned 32-bit words | PTX uses byte addresses across state spaces | `Partial` | `Direct` | `SM8`, `SM9` | Effective addresses are byte-based, but legal fetch/load/store access is aligned 32-bit only in v1. |
@@ -174,7 +182,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | --- | --- | --- | --- | --- | --- |
 | `.const` state space | PTX defines constant memory and constant-space loads | `Rejected` | `Direct` | `PA4` | `.const` declarations are rejected by the frontend today. |
 | `.local` state space | PTX defines per-thread local memory and spill-like addressing | `Rejected` | `None` | none | No `.local` declarations, addressing, or lowering path exists. |
-| Floating-point families beyond the narrow FP32 subset | PTX supports broader FP ALU, conversions, rounding modes, unordered compares, and richer literal forms | `Rejected` | `Direct` | `PA4` | Today the accepted FP32 surface is `mov.f32`, `add.f32`, `mul.f32`, `sub.f32`, `neg.f32`, `abs.f32`, `fma.rn.f32`, ordered `setp.*.f32`, `selp.f32`, `min/max.f32`, `ld.global.f32`, and `st.global.f32`. |
+| Floating-point families beyond the narrow FP32 subset | PTX supports broader FP ALU, conversions, rounding modes, unordered compares, richer literal forms, and native packed/vector arithmetic | `Rejected` | `Direct` | `PA4` | Today the accepted FP32 surface is `mov.f32`, `mov.v2/v4.f32`, `add.f32`, `mul.f32`, `sub.f32`, `neg.f32`, `abs.f32`, `fma.rn.f32`, ordered `setp.*.f32`, `selp.f32`, `min/max.f32`, `ld.global.f32`, `ld.global.v2/v4.f32`, `st.global.f32`, and `st.global.v2/v4.f32`. |
 | SFU instructions | PTX includes special-function instructions such as reciprocal and transcendental ops | `Rejected` | `None` | none | No PTX SFU mnemonics are accepted yet. |
 | Tensor and MMA instructions | PTX includes tensor fragment, MMA, and tensor-memory instructions | `Rejected` | `None` | none | No PTX tensor surface is exposed yet. |
 | Barriers and synchronization | PTX includes CTA sync, async copy coordination, and barrier objects | `Rejected` | `None` | none | No PTX-visible barrier or synchronization instructions exist in the current frontend/runtime path. |

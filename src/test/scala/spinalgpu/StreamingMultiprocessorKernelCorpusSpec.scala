@@ -33,6 +33,15 @@ class SharedRoundtripStreamingMultiprocessorSpec
 class VectorAdd1WarpStreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAdd1Warp)
 
+class VectorLoadStoreF32x2StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorLoadStoreF32x2)
+
+class VectorLoadStoreF32x4StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorLoadStoreF32x4)
+
+class VectorAddF32x4StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddF32x4)
+
 class MatrixAddF32StreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixAddF32)
 

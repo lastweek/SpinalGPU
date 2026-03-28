@@ -1,0 +1,77 @@
+// Purpose: Add one FP32 float4 tuple per thread using vector loads/stores and scalar CUDA-core adds.
+// Primary feature: floating_point
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread owns one output float4 tuple.
+// - The kernel computes the byte address for A[idx], B[idx], and C[idx], loads two
+//   .v4.f32 tuples, adds the four components with scalar add.f32 instructions, and
+//   stores the result tuple back to global memory.
+// - The vector syntax shortens the data-movement spelling, but the math remains purely scalar.
+//
+// Where this fits:
+// - This is the first teaching kernel that combines PTX vector tuple movement with the
+//   existing scalar CUDA-core FP32 arithmetic path.
+// - It is the bridge between scalar kernels and matrix kernels: each thread now owns a
+//   small tuple, but the underlying computation is still scalar per component.
+//
+// Key model details:
+// - One float4 tuple occupies 16 bytes, so %tid.x is shifted left by 4 to form the tuple base.
+// - ld.global.v4.f32 and st.global.v4.f32 lower to four scalar FP32 memory operations.
+// - The four add.f32 instructions are explicit because SpinalGPU does not yet expose a
+//   packed vector ALU in the machine ISA.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_add_f32x4(const float4* A, const float4* B, float4* C) {
+//   unsigned idx = threadIdx.x;
+//   float4 a = A[idx];
+//   float4 b = B[idx];
+//   C[idx] = make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
+// }
+//
+// SpinalGPU note:
+// - This kernel uses PTX vector tuple syntax, but execution is still scalar underneath:
+//   the frontend expands the tuple load/store and the CUDA core performs four scalar adds.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_add_f32x4(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<8>;
+    .reg .f32 %f<8>;
+
+    // Setup
+    // Load the three base pointers and use %tid.x as the float4 tuple index.
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [out_ptr];
+    mov.u32 %r3, %tid.x;
+
+    // Core
+    // Convert the float4 tuple index into bytes and build A/B/C base addresses.
+    shl.b32 %r4, %r3, 4;
+    add.u32 %r5, %r0, %r4;
+    add.u32 %r6, %r1, %r4;
+    add.u32 %r7, %r2, %r4;
+
+    // Load one float4 tuple from each input vector.
+    ld.global.v4.f32 {%f0, %f1, %f2, %f3}, [%r5];
+    ld.global.v4.f32 {%f4, %f5, %f6, %f7}, [%r6];
+
+    // Add the four FP32 components on the scalar CUDA-core datapath.
+    add.f32 %f0, %f0, %f4;
+    add.f32 %f1, %f1, %f5;
+    add.f32 %f2, %f2, %f6;
+    add.f32 %f3, %f3, %f7;
+
+    // Store the result tuple back to global memory.
+    st.global.v4.f32 [%r7], {%f0, %f1, %f2, %f3};
+
+    // Exit
+    ret;
+}

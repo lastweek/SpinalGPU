@@ -249,6 +249,21 @@ object KernelCorpus {
       ((a * b) + c) & 0xFFFFFFFFL
     }
 
+  private val vectorLoadStoreF32x2Input: Seq[Float] =
+    Seq(-1.0f, 0.5f, 2.0f, -3.25f, 4.5f, 5.75f, -6.0f, 7.125f)
+
+  private val vectorLoadStoreF32x4Input: Seq[Float] =
+    Seq(1.0f, -2.0f, 3.5f, -4.25f, 5.0f, -6.5f, 7.75f, 8.125f)
+
+  private val vectorAddF32x4InputA: Seq[Float] =
+    Seq(1.0f, 2.0f, 3.0f, 4.0f, -1.5f, -2.5f, 6.0f, 8.0f)
+
+  private val vectorAddF32x4InputB: Seq[Float] =
+    Seq(0.25f, -0.5f, 1.5f, 2.0f, 3.5f, 4.5f, -6.0f, 0.125f)
+
+  private val vectorAddF32x4Expected: Seq[Float] =
+    vectorAddF32x4InputA.zip(vectorAddF32x4InputB).map { case (a, b) => a + b }
+
   val addStoreExit: KernelCase = KernelCase(
     name = "add_store_exit",
     relativeSourcePath = "arithmetic/add_store_exit.ptx",
@@ -357,6 +372,58 @@ object KernelCorpus {
       checks = Seq(ExpectWords(base = 0x700, values = (0 until 8).map(index => (index + (index * 10)).toLong)))
     ),
     harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val vectorLoadStoreF32x2: KernelCase = KernelCase(
+    name = "vector_load_store_f32x2",
+    relativeSourcePath = "arithmetic/vector_load_store_f32x2.ptx",
+    purpose = "Round-trip one FP32 float2 tuple per thread through global memory.",
+    primaryFeature = GlobalMemory,
+    secondaryFeatures = Seq(FloatingPoint, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, argBase = 0x560),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x6000, values = vectorLoadStoreF32x2Input),
+      WriteArgBuffer(base = 0x560, values = Seq(0x6000L, 0x6100L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x6100, values = vectorLoadStoreF32x2Input))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val vectorLoadStoreF32x4: KernelCase = KernelCase(
+    name = "vector_load_store_f32x4",
+    relativeSourcePath = "arithmetic/vector_load_store_f32x4.ptx",
+    purpose = "Round-trip one FP32 float4 tuple per thread through global memory.",
+    primaryFeature = GlobalMemory,
+    secondaryFeatures = Seq(FloatingPoint, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 2, argBase = 0x5A0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x6200, values = vectorLoadStoreF32x4Input),
+      WriteArgBuffer(base = 0x5A0, values = Seq(0x6200L, 0x6300L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x6300, values = vectorLoadStoreF32x4Input))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val vectorAddF32x4: KernelCase = KernelCase(
+    name = "vector_add_f32x4",
+    relativeSourcePath = "arithmetic/vector_add_f32x4.ptx",
+    purpose = "Add one FP32 float4 tuple per thread using vector loads/stores and scalar CUDA-core adds.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 2, argBase = 0x5E0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x6400, values = vectorAddF32x4InputA),
+      WriteDataF32(base = 0x6500, values = vectorAddF32x4InputB),
+      WriteArgBuffer(base = 0x5E0, values = Seq(0x6400L, 0x6500L, 0x6600L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x6600, values = vectorAddF32x4Expected))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
   val matrixAddF32: KernelCase = KernelCase(
@@ -581,6 +648,9 @@ object KernelCorpus {
     uniformLoop,
     sharedRoundtrip,
     vectorAdd1Warp,
+    vectorLoadStoreF32x2,
+    vectorLoadStoreF32x4,
+    vectorAddF32x4,
     matrixAddF32,
     matrixMulF32,
     reluClampF32,

@@ -56,6 +56,22 @@ object PtxAssembler {
     }
   }
 
+  private final case class InstructionSequence(instructions: Seq[PtxInstruction]) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int =
+      instructions.map(_.machineWordCount(layout, context)).sum
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      val words = mutable.ArrayBuffer.empty[Int]
+      var currentPc = machinePc
+      instructions.foreach { instruction =>
+        val emitted = instruction.emit(currentPc, layout, context, labels)
+        words ++= emitted
+        currentPc += emitted.length * Isa.instructionBytes
+      }
+      words.toSeq
+    }
+  }
+
   private final case class BinaryInstruction(
       opcode: Int,
       immediateOpcode: Option[Int],
@@ -775,11 +791,63 @@ object PtxAssembler {
       MemoryOperand(baseRegister = baseRegister, symbol = symbol, immediateOffset = immediateOffset)
     }
 
+    def parseTopLevelOperands(text: String): Seq[String] = {
+      val items = mutable.ArrayBuffer.empty[String]
+      val current = new StringBuilder
+      var braceDepth = 0
+      var bracketDepth = 0
+
+      text.foreach {
+        case '{' =>
+          braceDepth += 1
+          current += '{'
+        case '}' =>
+          require(braceDepth > 0, s"unmatched '}' in operand list: $statement")
+          braceDepth -= 1
+          current += '}'
+        case '[' =>
+          bracketDepth += 1
+          current += '['
+        case ']' =>
+          require(bracketDepth > 0, s"unmatched ']' in operand list: $statement")
+          bracketDepth -= 1
+          current += ']'
+        case ',' if braceDepth == 0 && bracketDepth == 0 =>
+          val token = current.toString.trim
+          require(token.nonEmpty, s"empty operand in: $statement")
+          items += token
+          current.clear()
+        case character =>
+          current += character
+      }
+
+      require(braceDepth == 0, s"unterminated brace tuple in: $statement")
+      require(bracketDepth == 0, s"unterminated memory operand in: $statement")
+
+      val tail = current.toString.trim
+      require(tail.nonEmpty, s"empty trailing operand in: $statement")
+      items += tail
+      items.toSeq
+    }
+
     def parseOperands(text: String, expected: Int): Seq[String] = {
-      val items = text.split(",").map(_.trim).toSeq
+      val items = parseTopLevelOperands(text)
       require(items.length == expected, s"expected $expected operands, got ${items.length}: $statement")
       items
     }
+
+    def parseFloatRegisterTuple(token: String, width: Int): Seq[String] = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("{") && trimmed.endsWith("}"), s"expected brace tuple, got: $trimmed")
+      val inner = trimmed.drop(1).dropRight(1).trim
+      require(inner.nonEmpty, s"empty tuple operand: $trimmed")
+      val items = parseTopLevelOperands(inner)
+      require(items.length == width, s"expected tuple width $width, got ${items.length}: $trimmed")
+      items.map(parseFloatRegisterName)
+    }
+
+    def withAdditionalOffset(operand: MemoryOperand, additionalBytes: Int): MemoryOperand =
+      operand.copy(immediateOffset = operand.immediateOffset + additionalBytes)
 
     statement match {
       case predicated if predicated.startsWith("@") =>
@@ -809,6 +877,20 @@ object PtxAssembler {
               case "mov.u64" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 MoveWideSpecialInstruction(destination, source)
+              case "mov.v2.f32" =>
+                val Seq(destinationTuple, sourceTuple) = parseOperands(rest, 2)
+                val destinations = parseFloatRegisterTuple(destinationTuple, 2)
+                val sources = parseFloatRegisterTuple(sourceTuple, 2)
+                InstructionSequence(destinations.zip(sources).map { case (destination, source) =>
+                  MovInstruction(destination, RegisterOperand(source))
+                })
+              case "mov.v4.f32" =>
+                val Seq(destinationTuple, sourceTuple) = parseOperands(rest, 2)
+                val destinations = parseFloatRegisterTuple(destinationTuple, 4)
+                val sources = parseFloatRegisterTuple(sourceTuple, 4)
+                InstructionSequence(destinations.zip(sources).map { case (destination, source) =>
+                  MovInstruction(destination, RegisterOperand(source))
+                })
               case "add.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.ADD, Some(Opcode.ADDI), destination, lhs, parseScalarOperand(rhs))
@@ -958,12 +1040,40 @@ object PtxAssembler {
               case "ld.global.f32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 LoadInstruction("global", parseFloatRegisterName(destination), parseMemoryOperand(source))
+              case "ld.global.v2.f32" =>
+                val Seq(destinationTuple, source) = parseOperands(rest, 2)
+                val destinations = parseFloatRegisterTuple(destinationTuple, 2)
+                val memory = parseMemoryOperand(source)
+                InstructionSequence(destinations.zipWithIndex.map { case (destination, index) =>
+                  LoadInstruction("global", destination, withAdditionalOffset(memory, index * 4))
+                })
+              case "ld.global.v4.f32" =>
+                val Seq(destinationTuple, source) = parseOperands(rest, 2)
+                val destinations = parseFloatRegisterTuple(destinationTuple, 4)
+                val memory = parseMemoryOperand(source)
+                InstructionSequence(destinations.zipWithIndex.map { case (destination, index) =>
+                  LoadInstruction("global", destination, withAdditionalOffset(memory, index * 4))
+                })
               case "st.global.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreInstruction("global", parseMemoryOperand(destination), source)
               case "st.global.f32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreInstruction("global", parseMemoryOperand(destination), parseFloatRegisterName(source))
+              case "st.global.v2.f32" =>
+                val Seq(destination, sourceTuple) = parseOperands(rest, 2)
+                val memory = parseMemoryOperand(destination)
+                val sources = parseFloatRegisterTuple(sourceTuple, 2)
+                InstructionSequence(sources.zipWithIndex.map { case (source, index) =>
+                  StoreInstruction("global", withAdditionalOffset(memory, index * 4), source)
+                })
+              case "st.global.v4.f32" =>
+                val Seq(destination, sourceTuple) = parseOperands(rest, 2)
+                val memory = parseMemoryOperand(destination)
+                val sources = parseFloatRegisterTuple(sourceTuple, 4)
+                InstructionSequence(sources.zipWithIndex.map { case (source, index) =>
+                  StoreInstruction("global", withAdditionalOffset(memory, index * 4), source)
+                })
               case "st.global.u64" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreWideInstruction("global", parseMemoryOperand(destination), source)

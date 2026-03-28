@@ -280,6 +280,82 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
     )
   }
 
+  test("lowers v2.f32 tuple move and global-memory operations into ordered scalar instructions") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry vector_v2(
+        |    .param .u32 ptr_param
+        |)
+        |{
+        |    .reg .u32 %r<1>;
+        |    .reg .f32 %f<4>;
+        |
+        |    ld.param.u32 %r0, [ptr_param];
+        |    ld.global.v2.f32 {%f0, %f1}, [%r0];
+        |    mov.v2.f32 {%f2, %f3}, {%f0, %f1};
+        |    st.global.v2.f32 [%r0], {%f2, %f3};
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 6, specialRegister = SpecialRegisterKind.ArgBase),
+      Isa.encodeMem(Opcode.LDG, reg = 1, base = 6, offset = 0),
+      Isa.encodeMem(Opcode.LDG, reg = 2, base = 1, offset = 0),
+      Isa.encodeMem(Opcode.LDG, reg = 3, base = 1, offset = 4),
+      Isa.encodeRrr(Opcode.MOV, rd = 4, rs0 = 2, rs1 = 0),
+      Isa.encodeRrr(Opcode.MOV, rd = 5, rs0 = 3, rs1 = 0),
+      Isa.encodeMem(Opcode.STG, reg = 4, base = 1, offset = 0),
+      Isa.encodeMem(Opcode.STG, reg = 5, base = 1, offset = 4),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("lowers v4.f32 tuple move and global-memory operations into ordered scalar instructions") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry vector_v4(
+        |    .param .u32 ptr_param
+        |)
+        |{
+        |    .reg .u32 %r<1>;
+        |    .reg .f32 %f<8>;
+        |
+        |    ld.param.u32 %r0, [ptr_param];
+        |    ld.global.v4.f32 {%f0, %f1, %f2, %f3}, [%r0 + 16];
+        |    mov.v4.f32 {%f4, %f5, %f6, %f7}, {%f0, %f1, %f2, %f3};
+        |    st.global.v4.f32 [%r0 + 32], {%f4, %f5, %f6, %f7};
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 10, specialRegister = SpecialRegisterKind.ArgBase),
+      Isa.encodeMem(Opcode.LDG, reg = 1, base = 10, offset = 0),
+      Isa.encodeMem(Opcode.LDG, reg = 2, base = 1, offset = 16),
+      Isa.encodeMem(Opcode.LDG, reg = 3, base = 1, offset = 20),
+      Isa.encodeMem(Opcode.LDG, reg = 4, base = 1, offset = 24),
+      Isa.encodeMem(Opcode.LDG, reg = 5, base = 1, offset = 28),
+      Isa.encodeRrr(Opcode.MOV, rd = 6, rs0 = 2, rs1 = 0),
+      Isa.encodeRrr(Opcode.MOV, rd = 7, rs0 = 3, rs1 = 0),
+      Isa.encodeRrr(Opcode.MOV, rd = 8, rs0 = 4, rs1 = 0),
+      Isa.encodeRrr(Opcode.MOV, rd = 9, rs0 = 5, rs1 = 0),
+      Isa.encodeMem(Opcode.STG, reg = 6, base = 1, offset = 32),
+      Isa.encodeMem(Opcode.STG, reg = 7, base = 1, offset = 36),
+      Isa.encodeMem(Opcode.STG, reg = 8, base = 1, offset = 40),
+      Isa.encodeMem(Opcode.STG, reg = 9, base = 1, offset = 44),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
   test("lowers 2D thread-coordinate guards with setp.lt.u32") {
     val program = PtxAssembler.assemble(
       """.version 8.0
@@ -347,6 +423,75 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
           |.visible .entry bad()
           |{
           |    .const .align 4 .b8 const_data[16];
+          |    ret;
+          |}
+        |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f32 %f<4>;
+          |
+          |    mov.v2.f32 {%f0}, {%f1, %f2};
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u32 %r<2>;
+          |    .reg .f32 %f<3>;
+          |
+          |    ld.global.v4.f32 {%f0, %f1, %f2, %r0}, [%r1];
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u32 %r<2>;
+          |
+          |    ld.global.v2.u32 {%r0, %r1}, [%r0];
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f32 %f<2>;
+          |
+          |    mov.v2.f32 %f0, {%f0, %f1};
           |    ret;
           |}
           |""".stripMargin
