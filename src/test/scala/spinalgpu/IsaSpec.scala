@@ -107,6 +107,41 @@ class IsaSpec extends AnyFunSuite with Matchers {
       SpecialRegisterKind.GridIdHi
   }
 
+  test("encodes, decodes, and disassembles low-precision opcodes") {
+    val ldg16 = Isa.encodeMem(Opcode.LDG16, reg = 3, base = 4, offset = 2)
+    val stg16 = Isa.encodeMem(Opcode.STG16, reg = 5, base = 6, offset = 10)
+    val hadd = Isa.encodeRrr(Opcode.HADD, rd = 7, rs0 = 8, rs1 = 9)
+    val hfma = Isa.encodeRrrr(Opcode.HFMA, rd = 10, rs0 = 11, rs1 = 12, rs2 = 13)
+    val hadd2 = Isa.encodeRrr(Opcode.HADD2, rd = 14, rs0 = 15, rs1 = 16)
+    val hmul2 = Isa.encodeRrr(Opcode.HMUL2, rd = 17, rs0 = 18, rs1 = 19)
+    val cvtf32f16 = Isa.encodeRrr(Opcode.CVTF32F16, rd = 20, rs0 = 21, rs1 = 0)
+    val cvtf16f32 = Isa.encodeRrr(Opcode.CVTF16F32, rd = 22, rs0 = 23, rs1 = 0)
+    val cvtf16x2e4m3x2 = Isa.encodeRrr(Opcode.CVTF16X2E4M3X2, rd = 24, rs0 = 25, rs1 = 0)
+    val cvte5m2x2f16x2 = Isa.encodeRrr(Opcode.CVTE5M2X2F16X2, rd = 26, rs0 = 27, rs1 = 0)
+
+    Isa.decodeWord(ldg16).opcode shouldBe Opcode.LDG16
+    Isa.decodeWord(stg16).opcode shouldBe Opcode.STG16
+    Isa.decodeWord(hadd).opcode shouldBe Opcode.HADD
+    Isa.decodeWord(hfma).opcode shouldBe Opcode.HFMA
+    Isa.decodeWord(hadd2).opcode shouldBe Opcode.HADD2
+    Isa.decodeWord(hmul2).opcode shouldBe Opcode.HMUL2
+    Isa.decodeWord(cvtf32f16).opcode shouldBe Opcode.CVTF32F16
+    Isa.decodeWord(cvtf16f32).opcode shouldBe Opcode.CVTF16F32
+    Isa.decodeWord(cvtf16x2e4m3x2).opcode shouldBe Opcode.CVTF16X2E4M3X2
+    Isa.decodeWord(cvte5m2x2f16x2).opcode shouldBe Opcode.CVTE5M2X2F16X2
+
+    Isa.disassemble(ldg16) shouldBe "ldg16 r3, [r4 + 2]"
+    Isa.disassemble(stg16) shouldBe "stg16 [r6 + 10], r5"
+    Isa.disassemble(hadd) shouldBe "hadd r7, r8, r9"
+    Isa.disassemble(hfma) shouldBe "hfma r10, r11, r12, r13"
+    Isa.disassemble(hadd2) shouldBe "hadd2 r14, r15, r16"
+    Isa.disassemble(hmul2) shouldBe "hmul2 r17, r18, r19"
+    Isa.disassemble(cvtf32f16) shouldBe "cvtf32f16 r20, r21, r0"
+    Isa.disassemble(cvtf16f32) shouldBe "cvtf16f32 r22, r23, r0"
+    Isa.disassemble(cvtf16x2e4m3x2) shouldBe "cvtf16x2e4m3x2 r24, r25, r0"
+    Isa.disassemble(cvte5m2x2f16x2) shouldBe "cvte5m2x2f16x2 r26, r27, r0"
+  }
+
   test("machine-code disassembler formats representative instructions") {
     Isa.disassemble(Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)) shouldBe "add r3, r1, r2"
     Isa.disassemble(Isa.encodeRrr(Opcode.FADD, rd = 6, rs0 = 7, rs1 = 8)) shouldBe "fadd r6, r7, r8"

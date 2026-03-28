@@ -1,0 +1,54 @@
+// Purpose: Add one FP16 scalar from each input array per thread and store the FP16 result.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread computes one scalar output element `C[i] = A[i] + B[i]`.
+// - The kernel reads one half from each input array, performs one `add.rn.f16`, and writes one half result.
+// - Control flow is straight-line: there is no loop, no branch, and no inter-thread communication.
+// Where this fits:
+// - This is the smallest end-to-end FP16 CUDA-core kernel in the corpus.
+// - It proves the new `%h` register class plus `ld/st.global.f16` and `add.rn.f16`.
+// Key model details:
+// - Global memory holds scalar FP16 elements packed every 2 bytes.
+// - `%tid.x` picks the element index; the byte offset is `tid.x * 2`.
+// - SpinalGPU keeps `%h` values in the low 16 bits of a 32-bit physical register slot.
+// CUDA-equivalent sketch (.cu):
+// __global__ void scalar_add_f16(const half* a, const half* b, half* c) {
+//   unsigned i = threadIdx.x;
+//   c[i] = __hadd(a[i], b[i]);
+// }
+// SpinalGPU note:
+// - The teaching launch is one CTA only, so `threadIdx.x` is enough to identify work.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry scalar_add_f16(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 c_ptr
+)
+{
+    .reg .u32 %r<7>;
+    .reg .f16 %h<3>;
+
+// Setup
+    ld.param.u32 %r0, [a_ptr];    // Base pointer for the first FP16 input vector.
+    ld.param.u32 %r1, [b_ptr];    // Base pointer for the second FP16 input vector.
+    ld.param.u32 %r2, [c_ptr];    // Base pointer for the FP16 output vector.
+    mov.u32 %r3, %tid.x;          // Scalar element index handled by this thread.
+    shl.b32 %r4, %r3, 1;          // Convert the scalar index to a 2-byte FP16 byte offset.
+    add.u32 %r5, %r0, %r4;
+    add.u32 %r6, %r1, %r4;
+    add.u32 %r4, %r2, %r4;
+
+// Core
+    ld.global.f16 %h0, [%r5];
+    ld.global.f16 %h1, [%r6];
+    add.rn.f16 %h2, %h0, %h1;    // Half-precision scalar add on the CUDA-core datapath.
+    st.global.f16 [%r4], %h2;
+
+// Exit
+    ret;
+}

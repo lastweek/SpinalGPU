@@ -389,6 +389,57 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
     )
   }
 
+  test("allocates low-precision register classes from the shared pool and lowers FP16 and FP8 instructions") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry low_precision(
+        |    .param .u32 ptr_param
+        |)
+        |{
+        |    .reg .u32 %r<1>;
+        |    .reg .f32 %f<1>;
+        |    .reg .f16 %h<2>;
+        |    .reg .f16x2 %x<2>;
+        |    .reg .b16 %b<1>;
+        |
+        |    ld.param.u32 %r0, [ptr_param];
+        |    ld.global.f16 %h0, [%r0];
+        |    ld.global.f16x2 %x0, [%r0 + 4];
+        |    ld.global.b16 %b0, [%r0 + 8];
+        |    cvt.f32.f16 %f0, %h0;
+        |    cvt.rn.f16.f32 %h1, %f0;
+        |    add.rn.f16x2 %x1, %x0, %x0;
+        |    cvt.rn.f16x2.e4m3x2 %x0, %b0;
+        |    cvt.satfinite.e4m3x2.f16x2 %b0, %x1;
+        |    st.global.f16 [%r0], %h1;
+        |    st.global.f16x2 [%r0 + 4], %x1;
+        |    st.global.b16 [%r0 + 8], %b0;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeSys(Opcode.S2R, rd = 8, specialRegister = SpecialRegisterKind.ArgBase),
+      Isa.encodeMem(Opcode.LDG, reg = 1, base = 8, offset = 0),
+      Isa.encodeMem(Opcode.LDG16, reg = 3, base = 1, offset = 0),
+      Isa.encodeMem(Opcode.LDG, reg = 5, base = 1, offset = 4),
+      Isa.encodeMem(Opcode.LDG16, reg = 7, base = 1, offset = 8),
+      Isa.encodeRrr(Opcode.CVTF32F16, rd = 2, rs0 = 3, rs1 = 0),
+      Isa.encodeRrr(Opcode.CVTF16F32, rd = 4, rs0 = 2, rs1 = 0),
+      Isa.encodeRrr(Opcode.HADD2, rd = 6, rs0 = 5, rs1 = 5),
+      Isa.encodeRrr(Opcode.CVTF16X2E4M3X2, rd = 5, rs0 = 7, rs1 = 0),
+      Isa.encodeRrr(Opcode.CVTE4M3X2F16X2, rd = 7, rs0 = 6, rs1 = 0),
+      Isa.encodeMem(Opcode.STG16, reg = 4, base = 1, offset = 0),
+      Isa.encodeMem(Opcode.STG, reg = 6, base = 1, offset = 4),
+      Isa.encodeMem(Opcode.STG16, reg = 7, base = 1, offset = 8),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
   test("lowers shared symbols to byte offsets in shared-memory instructions") {
     val program = PtxAssembler.assemble(
       """.version 8.0
@@ -440,6 +491,24 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
           |    .reg .f32 %f<4>;
           |
           |    mov.v2.f32 {%f0}, {%f1, %f2};
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u32 %r<1>;
+          |    .reg .f16 %h<1>;
+          |
+          |    ld.shared.f16 %h0, [%r0];
           |    ret;
           |}
           |""".stripMargin

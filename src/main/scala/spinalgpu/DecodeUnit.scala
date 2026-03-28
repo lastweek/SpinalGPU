@@ -27,6 +27,7 @@ class DecodeUnit(config: SmConfig) extends Component {
   io.decoded.immediate := imm
   io.decoded.specialRegister := rs0.resized
   io.decoded.addressSpace := AddressSpaceKind.GLOBAL
+  io.decoded.memoryAccessWidth := MemoryAccessWidthKind.WORD
   io.decoded.writesRd := False
   io.decoded.usesRs0 := False
   io.decoded.usesRs1 := False
@@ -58,18 +59,28 @@ class DecodeUnit(config: SmConfig) extends Component {
     is(B(Opcode.ADD, 8 bits), B(Opcode.SUB, 8 bits), B(Opcode.MULLO, 8 bits), B(Opcode.AND, 8 bits), B(Opcode.OR, 8 bits),
       B(Opcode.XOR, 8 bits), B(Opcode.SHL, 8 bits), B(Opcode.SHR, 8 bits), B(Opcode.SETEQ, 8 bits), B(Opcode.SETLT, 8 bits),
       B(Opcode.SETLTS, 8 bits), B(Opcode.FADD, 8 bits), B(Opcode.FMUL, 8 bits), B(Opcode.FSUB, 8 bits),
-      B(Opcode.FSETEQ, 8 bits), B(Opcode.FSETLT, 8 bits)) {
+      B(Opcode.FSETEQ, 8 bits), B(Opcode.FSETLT, 8 bits), B(Opcode.HADD, 8 bits), B(Opcode.HMUL, 8 bits),
+      B(Opcode.HADD2, 8 bits), B(Opcode.HMUL2, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.CUDA
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True
       io.decoded.usesRs1 := True
     }
-    is(B(Opcode.FNEG, 8 bits), B(Opcode.FABS, 8 bits)) {
+    is(
+      B(Opcode.FNEG, 8 bits),
+      B(Opcode.FABS, 8 bits),
+      B(Opcode.CVTF32F16, 8 bits),
+      B(Opcode.CVTF16F32, 8 bits),
+      B(Opcode.CVTF16X2E4M3X2, 8 bits),
+      B(Opcode.CVTF16X2E5M2X2, 8 bits),
+      B(Opcode.CVTE4M3X2F16X2, 8 bits),
+      B(Opcode.CVTE5M2X2F16X2, 8 bits)
+    ) {
       io.decoded.target := ExecutionUnitKind.CUDA
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True
     }
-    is(B(Opcode.FFMA, 8 bits)) {
+    is(B(Opcode.FFMA, 8 bits), B(Opcode.HFMA, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.CUDA
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True
@@ -91,6 +102,15 @@ class DecodeUnit(config: SmConfig) extends Component {
     is(B(Opcode.LDG, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.LSU
       io.decoded.addressSpace := AddressSpaceKind.GLOBAL
+      io.decoded.memoryAccessWidth := MemoryAccessWidthKind.WORD
+      io.decoded.writesRd := True
+      io.decoded.usesRs0 := True
+      io.decoded.isLoad := True
+    }
+    is(B(Opcode.LDG16, 8 bits)) {
+      io.decoded.target := ExecutionUnitKind.LSU
+      io.decoded.addressSpace := AddressSpaceKind.GLOBAL
+      io.decoded.memoryAccessWidth := MemoryAccessWidthKind.HALFWORD
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True
       io.decoded.isLoad := True
@@ -98,12 +118,21 @@ class DecodeUnit(config: SmConfig) extends Component {
     is(B(Opcode.STG, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.LSU
       io.decoded.addressSpace := AddressSpaceKind.GLOBAL
+      io.decoded.memoryAccessWidth := MemoryAccessWidthKind.WORD
+      io.decoded.usesRs0 := True
+      io.decoded.isStore := True
+    }
+    is(B(Opcode.STG16, 8 bits)) {
+      io.decoded.target := ExecutionUnitKind.LSU
+      io.decoded.addressSpace := AddressSpaceKind.GLOBAL
+      io.decoded.memoryAccessWidth := MemoryAccessWidthKind.HALFWORD
       io.decoded.usesRs0 := True
       io.decoded.isStore := True
     }
     is(B(Opcode.LDS, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.LSU
       io.decoded.addressSpace := AddressSpaceKind.SHARED
+      io.decoded.memoryAccessWidth := MemoryAccessWidthKind.WORD
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True
       io.decoded.isLoad := True
@@ -111,6 +140,7 @@ class DecodeUnit(config: SmConfig) extends Component {
     is(B(Opcode.STS, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.LSU
       io.decoded.addressSpace := AddressSpaceKind.SHARED
+      io.decoded.memoryAccessWidth := MemoryAccessWidthKind.WORD
       io.decoded.usesRs0 := True
       io.decoded.isStore := True
     }

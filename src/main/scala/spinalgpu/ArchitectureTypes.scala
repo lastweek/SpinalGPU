@@ -11,6 +11,10 @@ object AddressSpaceKind extends SpinalEnum {
   val SHARED, GLOBAL = newElement()
 }
 
+object MemoryAccessWidthKind extends SpinalEnum {
+  val HALFWORD, WORD = newElement()
+}
+
 case class KernelCommandDesc(config: SmConfig) extends Bundle {
   val entryPc = UInt(config.addressWidth bits)
   val gridDimX = UInt(config.dataWidth bits)
@@ -117,6 +121,7 @@ case class DecodedInstruction(config: SmConfig) extends Bundle {
   val immediate = SInt(config.dataWidth bits)
   val specialRegister = UInt(config.specialRegisterWidth bits)
   val addressSpace = AddressSpaceKind()
+  val memoryAccessWidth = MemoryAccessWidthKind()
   val writesRd = Bool()
   val usesRs0 = Bool()
   val usesRs1 = Bool()
@@ -168,6 +173,7 @@ case class CudaIssueRsp(config: SmConfig) extends Bundle {
 case class LsuReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val addressSpace = AddressSpaceKind()
+  val accessWidth = MemoryAccessWidthKind()
   val write = Bool()
   val activeMask = Bits(config.warpSize bits)
   val addresses = Vec(UInt(config.addressWidth bits), config.warpSize)
@@ -244,6 +250,7 @@ case class GlobalMemBurstReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val write = Bool()
   val address = UInt(config.addressWidth bits)
+  val accessWidth = MemoryAccessWidthKind()
   val beatCount = UInt(config.globalBurstBeatCountWidth bits)
   val writeData = Vec(Bits(config.dataWidth bits), config.cudaLaneCount)
   val byteMask = Bits(config.byteMaskWidth bits)
@@ -261,6 +268,7 @@ case class ExternalMemBurstReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val write = Bool()
   val address = UInt(config.addressWidth bits)
+  val accessWidth = MemoryAccessWidthKind()
   val beatCount = UInt(config.globalBurstBeatCountWidth bits)
   val writeData = Vec(Bits(config.dataWidth bits), config.cudaLaneCount)
   val byteMask = Bits(config.byteMaskWidth bits)

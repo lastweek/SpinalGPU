@@ -1,0 +1,60 @@
+// Purpose: Add one packed E4M3x2 vector from each input array per thread and store one packed E4M3x2 result.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread loads two packed FP8 carriers, one from each input array.
+// - The carriers are converted into packed `f16x2` values, added with packed FP16 arithmetic, then narrowed back to E4M3x2 with `satfinite`.
+// - One packed 16-bit result carrier is written to global memory.
+// Where this fits:
+// - This is the first arithmetic kernel that exercises the official-like FP8 path end to end.
+// - It shows the intended CUDA-core flow for packed FP8: convert -> operate in FP16 -> convert back.
+// Key model details:
+// - Inputs and outputs are stored as packed 16-bit carriers spaced every 2 bytes.
+// - `cvt.satfinite.e4m3x2.f16x2` keeps the result in-range for the target E4M3 format.
+// - Arithmetic itself is still performed as `f16x2`, not native FP8 math.
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_add_e4m3x2(const uint16_t* a_bits, const uint16_t* b_bits, uint16_t* c_bits) {
+//   unsigned i = threadIdx.x;
+//   // Approximate teaching sketch: decode packed FP8, add in half2, then re-encode.
+//   c_bits[i] = convert_half2_to_e4m3x2_satfinite(add_half2(convert_e4m3x2_to_half2(a_bits[i]),
+//                                                            convert_e4m3x2_to_half2(b_bits[i])));
+// }
+// SpinalGPU note:
+// - This is intentionally “official-like”: FP8 stays as packed alternate-format carriers rather than a fake scalar FP8 register class.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_add_e4m3x2(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 c_ptr
+)
+{
+    .reg .u32 %r<7>;
+    .reg .b16 %b<3>;
+    .reg .f16x2 %x<3>;
+
+// Setup
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [c_ptr];
+    mov.u32 %r3, %tid.x;
+    shl.b32 %r4, %r3, 1;          // Packed-carrier byte offset.
+    add.u32 %r5, %r0, %r4;
+    add.u32 %r6, %r1, %r4;
+    add.u32 %r4, %r2, %r4;
+
+// Core
+    ld.global.b16 %b0, [%r5];
+    ld.global.b16 %b1, [%r6];
+    cvt.rn.f16x2.e4m3x2 %x0, %b0;
+    cvt.rn.f16x2.e4m3x2 %x1, %b1;
+    add.rn.f16x2 %x2, %x0, %x1;  // Packed arithmetic stays in the half2 domain.
+    cvt.satfinite.e4m3x2.f16x2 %b2, %x2;
+    st.global.b16 [%r4], %b2;
+
+// Exit
+    ret;
+}

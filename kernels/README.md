@@ -42,6 +42,8 @@ Typical examples:
 
 - `arithmetic/scalar_unary_f32.ptx`
 - `arithmetic/scalar_mad_u32.ptx`
+- `arithmetic/scalar_add_f16.ptx`
+- `arithmetic/scalar_convert_e4m3x2_f16x2.ptx`
 
 Practical meaning:
 
@@ -68,6 +70,8 @@ Typical examples:
 
 - `arithmetic/vector_load_store_f32x4.ptx`
 - `arithmetic/vector_add_f32x4.ptx`
+- `arithmetic/vector_add_f16x2.ptx`
+- `arithmetic/vector_add_e4m3x2.ptx`
 
 Practical meaning:
 
@@ -104,6 +108,9 @@ Typical examples:
 - `arithmetic/matrix_transpose_f32.ptx`
 - `arithmetic/matrix_add_f32.ptx`
 - `arithmetic/matrix_mul_f32.ptx`
+- `arithmetic/matrix_add_f16.ptx`
+- `arithmetic/matrix_mul_f16_accum_f32.ptx`
+- `arithmetic/matrix_mul_e4m3x2_accum_f32.ptx`
 
 Practical meaning:
 
@@ -118,6 +125,32 @@ Current matrix v1 in this repo means:
 - inputs and outputs in global memory
 - scalar CUDA-core FP32 execution under the hood
 - no shared-memory tiling and no multi-CTA `blockIdx` decomposition yet
+
+## Low-Precision Kernel Patterns
+
+Low-precision CUDA-core kernels follow the same scalar/vector/matrix split, but they use different PTX register surfaces:
+
+- `%h<N>`
+  - scalar `f16`
+  - examples: `scalar_add_f16`, `matrix_add_f16`
+- `%x<N>`
+  - packed `f16x2`
+  - examples: `vector_add_f16x2`, `scalar_convert_e4m3x2_f16x2`
+- `%b<N>`
+  - packed FP8 carrier words such as `e4m3x2` and `e5m2x2`
+  - examples: `vector_add_e4m3x2`, `matrix_mul_e5m2x2_accum_f32`
+
+Practical meaning:
+
+- FP16 scalar kernels usually load and store 16-bit global elements directly
+- FP16 packed-vector kernels usually move 32-bit `f16x2` tuples through `%x` registers
+- FP8 kernels carry packed 16-bit alternate-format words in `%b`, convert them to `%x`, and then usually widen to FP32 before accumulation
+
+Current low-precision matrix behavior:
+
+- `matrix_add_f16` keeps low-precision values end to end
+- `matrix_mul_f16_accum_f32` uses low-precision inputs with FP32 accumulation and FP32 output
+- packed-FP8 matrix kernels first convert `e4m3x2/e5m2x2` into `f16x2`, then widen and accumulate in FP32
 
 ## Repo-Specific Vector Rule
 

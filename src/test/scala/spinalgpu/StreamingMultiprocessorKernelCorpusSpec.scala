@@ -57,6 +57,36 @@ class MatrixAddF32StreamingMultiprocessorSpec
 class MatrixMulF32StreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulF32)
 
+class ScalarAddF16StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarAddF16)
+
+class VectorAddF16x2StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddF16x2)
+
+class MatrixAddF16StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixAddF16)
+
+class MatrixMulF16AccumF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulF16AccumF32)
+
+class ScalarConvertE4m3x2F16x2StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarConvertE4m3x2F16x2)
+
+class ScalarConvertE5m2x2F16x2StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarConvertE5m2x2F16x2)
+
+class VectorAddE4m3x2StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddE4m3x2)
+
+class VectorAddE5m2x2StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddE5m2x2)
+
+class MatrixMulE4m3x2AccumF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulE4m3x2AccumF32)
+
+class MatrixMulE5m2x2AccumF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulE5m2x2AccumF32)
+
 class ReluClampF32StreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.reluClampF32)
 

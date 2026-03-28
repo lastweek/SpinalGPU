@@ -20,6 +20,7 @@ class ExternalMemoryAxiAdapterSpec extends AnyFunSuite with Matchers {
     dut.io.response.ready #= true
     dut.io.request.payload.warpId #= 0
     dut.io.request.payload.write #= false
+    dut.io.request.payload.accessWidth #= MemoryAccessWidthKind.WORD
     dut.io.request.payload.address #= 0
     dut.io.request.payload.beatCount #= 0
     dut.io.request.payload.byteMask #= 0xF
@@ -52,6 +53,7 @@ class ExternalMemoryAxiAdapterSpec extends AnyFunSuite with Matchers {
       dut.io.request.valid #= true
       dut.io.request.payload.address #= 0x200
       dut.io.request.payload.beatCount #= 4
+      dut.clockDomain.waitSampling()
       waitUntil() { dut.io.axi.ar.valid.toBoolean }
       dut.io.axi.ar.len.toBigInt shouldBe BigInt(3)
       dut.clockDomain.waitSampling()
@@ -83,6 +85,7 @@ class ExternalMemoryAxiAdapterSpec extends AnyFunSuite with Matchers {
       dut.io.request.payload.writeData(0) #= 0x1111
       dut.io.request.payload.writeData(1) #= 0x2222
       dut.io.request.payload.writeData(2) #= 0x3333
+      dut.clockDomain.waitSampling()
       waitUntil() { dut.io.axi.aw.valid.toBoolean }
       dut.io.axi.aw.len.toBigInt shouldBe BigInt(2)
       dut.clockDomain.waitSampling()
@@ -93,6 +96,41 @@ class ExternalMemoryAxiAdapterSpec extends AnyFunSuite with Matchers {
       memory.memory.readBigInt(0x240L, config.byteCount) shouldBe BigInt(0x1111)
       memory.memory.readBigInt(0x244L, config.byteCount) shouldBe BigInt(0x2222)
       memory.memory.readBigInt(0x248L, config.byteCount) shouldBe BigInt(0x3333)
+
+      memory.stop()
+    }
+  }
+
+  test("drives AXI halfword writes with shifted byte strobes") {
+    SimConfig.withVerilator.compile(new ExternalMemoryAxiAdapter(config)).doSim { dut =>
+      implicit val clockDomain: ClockDomain = dut.clockDomain
+      dut.clockDomain.forkStimulus(period = 10)
+      val memory = AxiMemorySim(dut.io.axi, dut.clockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
+      memory.start()
+      initDefaults(dut)
+
+      memory.memory.writeBigInt(0x300L, BigInt("AABBCCDD", 16), config.byteCount)
+      memory.memory.writeBigInt(0x304L, BigInt("55667788", 16), config.byteCount)
+
+      dut.io.request.valid #= true
+      dut.io.request.payload.write #= true
+      dut.io.request.payload.accessWidth #= MemoryAccessWidthKind.HALFWORD
+      dut.io.request.payload.address #= 0x302
+      dut.io.request.payload.beatCount #= 2
+      dut.io.request.payload.byteMask #= 0x3
+      dut.io.request.payload.writeData(0) #= 0x1122
+      dut.io.request.payload.writeData(1) #= 0x3344
+
+      waitUntil() { dut.io.axi.aw.valid.toBoolean }
+      dut.io.axi.aw.len.toBigInt shouldBe BigInt(1)
+      dut.io.axi.aw.size.toBigInt shouldBe BigInt(1)
+      dut.clockDomain.waitSampling()
+      dut.io.request.valid #= false
+
+      waitUntil(timeoutCycles = 200) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.error.toBoolean shouldBe false
+      memory.memory.readBigInt(0x300L, config.byteCount) shouldBe BigInt("1122CCDD", 16)
+      memory.memory.readBigInt(0x304L, config.byteCount) shouldBe BigInt("55663344", 16)
 
       memory.stop()
     }

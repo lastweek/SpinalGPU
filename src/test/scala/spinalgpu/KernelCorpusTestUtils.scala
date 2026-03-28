@@ -4,7 +4,7 @@ import org.scalatest.Assertions._
 import spinal.core.ClockDomain
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
-import spinal.lib.bus.amba4.axilite.sim._
+import spinal.lib.bus.amba4.axilite.AxiLite4
 import spinalgpu.toolchain.KernelCorpus
 import spinalgpu.toolchain.KernelCorpus._
 
@@ -19,7 +19,7 @@ object KernelCorpusTestUtils {
 
   private def waitForGpuTopCompletion(
       dut: GpuTop,
-      hostControl: AxiLite4Driver,
+      hostControlBus: AxiLite4,
       clockDomain: ClockDomain,
       kernel: KernelCase
   ): FaultObservation = {
@@ -40,12 +40,12 @@ object KernelCorpusTestUtils {
         f"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
     )
 
-    val status = ExecutionTestUtils.readExecutionStatus(hostControl)
+    val status = ExecutionTestUtils.readExecutionStatus(hostControlBus, clockDomain)
     val fault = ((status >> 2) & 1) == 1
     FaultObservation(
       fault = fault,
-      code = ExecutionTestUtils.readFaultCode(hostControl),
-      faultPc = ExecutionTestUtils.readFaultPc(hostControl)
+      code = ExecutionTestUtils.readFaultCode(hostControlBus, clockDomain),
+      faultPc = ExecutionTestUtils.readFaultPc(hostControlBus, clockDomain)
     )
   }
 
@@ -63,6 +63,10 @@ object KernelCorpusTestUtils {
       ExecutionTestUtils.writeDataWords(memory, base, values, byteCount)
     case PreloadOp.WriteDataF32(base, values) =>
       ExecutionTestUtils.writeDataF32(memory, base, values, byteCount)
+    case PreloadOp.WriteDataF16(base, values) =>
+      ExecutionTestUtils.writeDataF16(memory, base, values)
+    case PreloadOp.WriteDataPacked16(base, values) =>
+      ExecutionTestUtils.writeDataPacked16(memory, base, values)
   }
 
   /** Checks one success condition from the declarative corpus definition. */
@@ -85,6 +89,26 @@ object KernelCorpusTestUtils {
         assert(
           actual == expectedWord,
           f"memory[0x$address%X] expected f32 bits 0x${expectedWord.toString(16)} but saw 0x${actual.toString(16)}"
+        )
+      }
+    case SuccessCheck.ExpectF16(base, values) =>
+      values.zipWithIndex.foreach { case (expected, index) =>
+        val address = base + (index.toLong * 2L)
+        val actual = ExecutionTestUtils.readWord(memory, address, 2)
+        val expectedWord = BigInt(expected & 0xFFFF)
+        assert(
+          actual == expectedWord,
+          f"memory[0x$address%X] expected f16 bits 0x${expectedWord.toString(16)} but saw 0x${actual.toString(16)}"
+        )
+      }
+    case SuccessCheck.ExpectPacked16(base, values) =>
+      values.zipWithIndex.foreach { case (expected, index) =>
+        val address = base + (index.toLong * 2L)
+        val actual = ExecutionTestUtils.readWord(memory, address, 2)
+        val expectedWord = BigInt(expected & 0xFFFF)
+        assert(
+          actual == expectedWord,
+          f"memory[0x$address%X] expected packed16 bits 0x${expectedWord.toString(16)} but saw 0x${actual.toString(16)}"
         )
       }
   }
@@ -170,18 +194,18 @@ object KernelCorpusTestUtils {
 
     SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
+      ExecutionTestUtils.idleAxiLite(dut.io.hostControl)
       dut.coreClockDomain.assertReset()
       dut.coreClockDomain.waitSampling()
       dut.coreClockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.coreClockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
-      val hostControl = AxiLite4Driver(dut.io.hostControl, dut.coreClockDomain)
       memory.start()
-      hostControl.reset()
+      ExecutionTestUtils.initializeAxiLiteMaster(dut.io.hostControl, dut.coreClockDomain)
 
       loadKernelCase(memory, kernel, config.byteCount)
-      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
-      val observation = waitForGpuTopCompletion(dut, hostControl, dut.coreClockDomain, kernel)
+      ExecutionTestUtils.submitKernelCommand(dut.io.hostControl, dut.coreClockDomain, kernel.command)
+      val observation = waitForGpuTopCompletion(dut, dut.io.hostControl, dut.coreClockDomain, kernel)
       dut.coreClockDomain.waitSampling(8)
 
       assertKernelExpectation(

@@ -1,0 +1,54 @@
+// Purpose: Add one packed FP16x2 value from each input array per thread and store the packed result.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread handles one packed `f16x2` tuple, so one thread processes two low-precision values at once.
+// - The kernel loads two packed half2-style values, performs one `add.rn.f16x2`, and stores one packed result.
+// - There is no control flow beyond the implicit one-thread-per-element mapping.
+// Where this fits:
+// - This is the low-precision vector counterpart to the scalar FP16 kernel.
+// - It proves `%x` registers and packed `ld/st.global.f16x2` movement through the existing scalar machine ISA.
+// Key model details:
+// - Each packed `f16x2` occupies 4 bytes in global memory.
+// - `%tid.x` chooses the tuple index; the byte offset is `tid.x * 4`.
+// - The arithmetic stays packed inside one physical 32-bit register slot.
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_add_f16x2(const half2* a, const half2* b, half2* c) {
+//   unsigned i = threadIdx.x;
+//   c[i] = __hadd2(a[i], b[i]);
+// }
+// SpinalGPU note:
+// - Vector PTX here is a packed low-precision register type, not the older brace-tuple `%f` vector syntax.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_add_f16x2(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 c_ptr
+)
+{
+    .reg .u32 %r<7>;
+    .reg .f16x2 %x<3>;
+
+// Setup
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [c_ptr];
+    mov.u32 %r3, %tid.x;          // Tuple index handled by this thread.
+    shl.b32 %r4, %r3, 2;          // Convert the tuple index to a 4-byte packed offset.
+    add.u32 %r5, %r0, %r4;
+    add.u32 %r6, %r1, %r4;
+    add.u32 %r4, %r2, %r4;
+
+// Core
+    ld.global.f16x2 %x0, [%r5];
+    ld.global.f16x2 %x1, [%r6];
+    add.rn.f16x2 %x2, %x0, %x1;  // Packed half2 add, lane 0 and lane 1 in parallel.
+    st.global.f16x2 [%r4], %x2;
+
+// Exit
+    ret;
+}

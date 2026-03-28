@@ -1,0 +1,126 @@
+// Purpose: Multiply two packed E4M3x2 input matrices with FP32 accumulation and store an FP32 output matrix.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - One thread computes one output element `C[row, col]`.
+// - The kernel walks the packed K dimension one carrier at a time; each carrier contributes two logical multiply-add terms.
+// - Each iteration converts packed E4M3x2 carriers into `f16x2`, expands the low and high lanes into scalar half values, converts them to FP32, and accumulates twice.
+// Where this fits:
+// - This is the packed-FP8 matrix analogue of `matrix_mul_f16_accum_f32`.
+// - It demonstrates the official-like FP8 teaching path: packed carrier load -> `f16x2` convert -> scalar FP32 accumulate.
+// Key model details:
+// - A and B are stored as row-major packed-carrier matrices over the K dimension: one 16-bit word holds two adjacent logical K values.
+// - `k_pairs`, `lda_pairs`, and `ldb_pairs` are measured in packed E4M3x2 carriers, not logical scalar elements.
+// - Output C remains row-major FP32 with `ldc` measured in FP32 elements.
+// CUDA-equivalent sketch (.cu):
+// __global__ void matrix_mul_e4m3x2_accum_f32(const uint16_t* A_bits, const uint16_t* B_bits, float* C,
+//                                             unsigned m, unsigned n, unsigned k_pairs,
+//                                             unsigned lda_pairs, unsigned ldb_pairs, unsigned ldc) {
+//   unsigned col = threadIdx.x;
+//   unsigned row = threadIdx.y;
+//   if (row < m && col < n) {
+//     float acc = 0.0f;
+//     for (unsigned kk = 0; kk < k_pairs; ++kk) {
+//       half2 a2 = convert_e4m3x2_to_half2(A_bits[row * lda_pairs + kk]);
+//       half2 b2 = convert_e4m3x2_to_half2(B_bits[kk * ldb_pairs + col]);
+//       acc = fmaf(__low2float(a2), __low2float(b2), acc);
+//       acc = fmaf(__high2float(a2), __high2float(b2), acc);
+//     }
+//     C[row * ldc + col] = acc;
+//   }
+// }
+// SpinalGPU note:
+// - This is still a one-CTA teaching GEMM. The packed FP8 path is CUDA-core based and does not involve tensor instructions.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry matrix_mul_e4m3x2_accum_f32(
+    .param .u32 A_ptr,
+    .param .u32 B_ptr,
+    .param .u32 C_ptr,
+    .param .u32 m,
+    .param .u32 n,
+    .param .u32 k_pairs,
+    .param .u32 lda_pairs,
+    .param .u32 ldb_pairs,
+    .param .u32 ldc
+)
+{
+    .reg .u32 %r<16>;
+    .reg .b16 %b<2>;
+    .reg .f16 %h<2>;
+    .reg .f16x2 %x<2>;
+    .reg .f32 %f<3>;
+    .pred %p<3>;
+
+// Setup
+    ld.param.u32 %r0, [A_ptr];
+    ld.param.u32 %r1, [B_ptr];
+    ld.param.u32 %r2, [C_ptr];
+    ld.param.u32 %r3, [m];
+    ld.param.u32 %r4, [n];
+    ld.param.u32 %r5, [k_pairs];
+    ld.param.u32 %r6, [lda_pairs];
+    ld.param.u32 %r7, [ldb_pairs];
+    ld.param.u32 %r8, [ldc];
+    mov.u32 %r9, %tid.x;          // Column coordinate.
+    mov.u32 %r10, %tid.y;         // Row coordinate.
+    setp.lt.u32 %p0, %r10, %r3;
+    @!%p0 bra done;
+    setp.lt.u32 %p1, %r9, %r4;
+    @!%p1 bra done;
+    mov.u32 %r11, 0;              // Packed-K loop index.
+    mov.f32 %f0, 0f00000000;      // FP32 accumulation register.
+
+// Core
+loop:
+    setp.lt.u32 %p2, %r11, %r5;
+    @!%p2 bra store_result;
+
+    mul.lo.u32 %r12, %r10, %r6;   // Packed A row base.
+    add.u32 %r12, %r12, %r11;     // A[row, kk_pair] carrier index.
+    shl.b32 %r12, %r12, 1;        // 16-bit carrier index -> byte offset.
+    add.u32 %r14, %r0, %r12;
+
+    mul.lo.u32 %r13, %r11, %r7;   // Packed B row-major base for this kk_pair.
+    add.u32 %r13, %r13, %r9;      // B[kk_pair, col] carrier index.
+    shl.b32 %r13, %r13, 1;
+    add.u32 %r15, %r1, %r13;
+
+    ld.global.b16 %b0, [%r14];
+    ld.global.b16 %b1, [%r15];
+    cvt.rn.f16x2.e4m3x2 %x0, %b0;
+    cvt.rn.f16x2.e4m3x2 %x1, %b1;
+
+    mov.f16 %h0, %x0;             // Low packed lane from A.
+    mov.f16 %h1, %x1;             // Low packed lane from B.
+    cvt.f32.f16 %f1, %h0;
+    cvt.f32.f16 %f2, %h1;
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+
+    mov.b32 %r12, %x0;            // Reinterpret packed half2 so the upper 16 bits can be shifted down.
+    mov.b32 %r13, %x1;
+    shr.b32 %r12, %r12, 16;
+    shr.b32 %r13, %r13, 16;
+    mov.f16 %h0, %r12;            // High packed lane from A.
+    mov.f16 %h1, %r13;            // High packed lane from B.
+    cvt.f32.f16 %f1, %h0;
+    cvt.f32.f16 %f2, %h1;
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+
+    add.u32 %r11, %r11, 1;
+    bra loop;
+
+store_result:
+    mul.lo.u32 %r12, %r10, %r8;   // FP32 output row base.
+    add.u32 %r12, %r12, %r9;
+    shl.b32 %r12, %r12, 2;
+    add.u32 %r15, %r2, %r12;
+    st.global.f32 [%r15], %f0;
+
+// Exit
+done:
+    ret;
+}

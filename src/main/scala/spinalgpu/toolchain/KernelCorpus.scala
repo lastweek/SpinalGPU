@@ -2,6 +2,7 @@ package spinalgpu.toolchain
 
 import java.nio.file.Path
 import spinalgpu.FaultCode
+import spinalgpu.LowPrecisionCodec
 
 /** Single source of truth for the PTX teaching corpus.
   *
@@ -92,6 +93,8 @@ object KernelCorpus {
     final case class WriteArgBuffer(base: Long, values: Seq[Long]) extends PreloadOp
     final case class WriteDataWords(base: Long, values: Seq[Long]) extends PreloadOp
     final case class WriteDataF32(base: Long, values: Seq[Float]) extends PreloadOp
+    final case class WriteDataF16(base: Long, values: Seq[Int]) extends PreloadOp
+    final case class WriteDataPacked16(base: Long, values: Seq[Int]) extends PreloadOp
   }
 
   /** Declarative success checks against the simulated memory image after completion. */
@@ -100,6 +103,8 @@ object KernelCorpus {
   object SuccessCheck {
     final case class ExpectWords(base: Long, values: Seq[Long]) extends SuccessCheck
     final case class ExpectF32(base: Long, values: Seq[Float]) extends SuccessCheck
+    final case class ExpectF16(base: Long, values: Seq[Int]) extends SuccessCheck
+    final case class ExpectPacked16(base: Long, values: Seq[Int]) extends SuccessCheck
   }
 
   /** Declarative completion model for a kernel case. */
@@ -274,6 +279,221 @@ object KernelCorpus {
 
   private val vectorAddF32x4Expected: Seq[Float] =
     vectorAddF32x4InputA.zip(vectorAddF32x4InputB).map { case (a, b) => a + b }
+
+  private def halfBits(value: Float): Int = LowPrecisionCodec.floatToHalfBits(value)
+
+  private def halfFloat(bits: Int): Float = LowPrecisionCodec.halfBitsToFloat(bits)
+
+  private def halfAddBits(lhs: Int, rhs: Int): Int = halfBits(halfFloat(lhs) + halfFloat(rhs))
+
+  private def half2(bitsLow: Int, bitsHigh: Int): Int = LowPrecisionCodec.packHalf2(bitsLow, bitsHigh)
+
+  private def word32(value: Int): Long = value.toLong & 0xFFFFFFFFL
+
+  private def packHalfWords(values: Seq[Int]): Seq[Int] = {
+    require(values.length % 2 == 0, "packed halfword sequences must have an even element count")
+    values.grouped(2).map { pair => half2(pair(0), pair(1)) }.toSeq
+  }
+
+  private def packFp8Words(values: Seq[Float], encode: Float => Int): Seq[Int] = {
+    require(values.length % 2 == 0, "packed fp8 sequences must have an even element count")
+    values.grouped(2).map { pair =>
+      LowPrecisionCodec.packFp8x2(encode(pair(0)), encode(pair(1)))
+    }.toSeq
+  }
+
+  private def packedFp8ToPackedHalf(words: Seq[Int], decode: Int => Float): Seq[Int] =
+    words.map { word =>
+      half2(
+        halfBits(decode(LowPrecisionCodec.unpackFp8x2Low(word))),
+        halfBits(decode(LowPrecisionCodec.unpackFp8x2High(word)))
+      )
+    }
+
+  private def packedFp8AddExpected(wordsA: Seq[Int], wordsB: Seq[Int], decode: Int => Float, encode: Float => Int): Seq[Int] =
+    wordsA.zip(wordsB).map { case (lhs, rhs) =>
+      val lhsLow = halfBits(decode(LowPrecisionCodec.unpackFp8x2Low(lhs)))
+      val lhsHigh = halfBits(decode(LowPrecisionCodec.unpackFp8x2High(lhs)))
+      val rhsLow = halfBits(decode(LowPrecisionCodec.unpackFp8x2Low(rhs)))
+      val rhsHigh = halfBits(decode(LowPrecisionCodec.unpackFp8x2High(rhs)))
+      LowPrecisionCodec.packFp8x2(
+        encode(halfFloat(halfAddBits(lhsLow, rhsLow))),
+        encode(halfFloat(halfAddBits(lhsHigh, rhsHigh)))
+      )
+    }
+
+  private def packMatrixRowsAsFp8x2(values: Seq[Float], rows: Int, cols: Int, encode: Float => Int): Seq[Int] = {
+    require(cols % 2 == 0, "matrix fp8 row packing requires an even column count")
+    for {
+      row <- 0 until rows
+      pair <- 0 until cols / 2
+    } yield {
+      val lowIndex = row * cols + (pair * 2)
+      val highIndex = lowIndex + 1
+      LowPrecisionCodec.packFp8x2(encode(values(lowIndex)), encode(values(highIndex)))
+    }
+  }
+
+  private def packMatrixColsAsFp8x2(values: Seq[Float], rows: Int, cols: Int, encode: Float => Int): Seq[Int] = {
+    require(rows % 2 == 0, "matrix fp8 column packing requires an even row count")
+    for {
+      pair <- 0 until rows / 2
+      col <- 0 until cols
+    } yield {
+      val lowIndex = (pair * 2) * cols + col
+      val highIndex = ((pair * 2) + 1) * cols + col
+      LowPrecisionCodec.packFp8x2(encode(values(lowIndex)), encode(values(highIndex)))
+    }
+  }
+
+  private def quantizeE4m3ToHalfFloat(value: Float): Float = {
+    val encoded = LowPrecisionCodec.floatToE4m3BitsSatFinite(value)
+    halfFloat(halfBits(LowPrecisionCodec.e4m3BitsToFloat(encoded)))
+  }
+
+  private def quantizeE5m2ToHalfFloat(value: Float): Float = {
+    val encoded = LowPrecisionCodec.floatToE5m2BitsSatFinite(value)
+    halfFloat(halfBits(LowPrecisionCodec.e5m2BitsToFloat(encoded)))
+  }
+
+  private val scalarAddF16InputA: Seq[Int] =
+    Seq(-1.0f, 0.5f, 1.5f, -2.25f, 3.0f, 4.5f, -5.5f, 6.0f).map(halfBits)
+
+  private val scalarAddF16InputB: Seq[Int] =
+    Seq(0.25f, -0.5f, 2.0f, 1.25f, -3.0f, 0.5f, 1.5f, -2.0f).map(halfBits)
+
+  private val scalarAddF16Expected: Seq[Int] =
+    scalarAddF16InputA.zip(scalarAddF16InputB).map { case (lhs, rhs) => halfAddBits(lhs, rhs) }
+
+  private val vectorAddF16x2InputAElements: Seq[Int] =
+    Seq(1.0f, -0.5f, 2.0f, 3.0f, -4.0f, 0.25f, 5.5f, -6.5f).map(halfBits)
+
+  private val vectorAddF16x2InputBElements: Seq[Int] =
+    Seq(0.5f, 1.5f, -1.0f, 2.5f, 0.75f, -0.25f, -2.5f, 4.0f).map(halfBits)
+
+  private val vectorAddF16x2InputA: Seq[Int] = packHalfWords(vectorAddF16x2InputAElements)
+  private val vectorAddF16x2InputB: Seq[Int] = packHalfWords(vectorAddF16x2InputBElements)
+
+  private val vectorAddF16x2Expected: Seq[Int] =
+    vectorAddF16x2InputAElements
+      .zip(vectorAddF16x2InputBElements)
+      .map { case (lhs, rhs) => halfAddBits(lhs, rhs) }
+      .grouped(2)
+      .map(pair => half2(pair(0), pair(1)))
+      .toSeq
+
+  private def matrixAddF16InputA(rows: Int, cols: Int): Seq[Int] = matrixAddInputA(rows, cols).map(halfBits)
+
+  private def matrixAddF16InputB(rows: Int, cols: Int): Seq[Int] = matrixAddInputB(rows, cols).map(halfBits)
+
+  private def matrixAddF16Expected(rows: Int, cols: Int): Seq[Int] =
+    matrixAddF16InputA(rows, cols).zip(matrixAddF16InputB(rows, cols)).map { case (lhs, rhs) => halfAddBits(lhs, rhs) }
+
+  private def matrixMulF16InputA(m: Int, k: Int): Seq[Int] = matrixMulInputA(m, k).map(halfBits)
+
+  private def matrixMulF16InputB(k: Int, n: Int): Seq[Int] = matrixMulInputB(k, n).map(halfBits)
+
+  private def matrixMulF16Expected(m: Int, n: Int, k: Int): Seq[Float] = {
+    val a = matrixMulF16InputA(m, k).map(halfFloat)
+    val b = matrixMulF16InputB(k, n).map(halfFloat)
+    for {
+      row <- 0 until m
+      col <- 0 until n
+    } yield {
+      var sum = 0.0f
+      var kk = 0
+      while (kk < k) {
+        sum = sum + (a(row * k + kk) * b(kk * n + col))
+        kk += 1
+      }
+      sum
+    }
+  }
+
+  private val scalarConvertE4m3Input: Seq[Int] =
+    packFp8Words(Seq(1.0f, -0.5f, 2.5f, 0.125f, -3.0f, 4.0f, 0.0f, 6.0f), LowPrecisionCodec.floatToE4m3BitsSatFinite)
+
+  private val scalarConvertE5m2Input: Seq[Int] =
+    packFp8Words(Seq(1.0f, -0.5f, 8.0f, 0.15625f, -12.0f, 3.5f, 0.0f, 24.0f), LowPrecisionCodec.floatToE5m2BitsSatFinite)
+
+  private val scalarConvertE4m3Expected: Seq[Int] =
+    packedFp8ToPackedHalf(scalarConvertE4m3Input, LowPrecisionCodec.e4m3BitsToFloat)
+
+  private val scalarConvertE5m2Expected: Seq[Int] =
+    packedFp8ToPackedHalf(scalarConvertE5m2Input, LowPrecisionCodec.e5m2BitsToFloat)
+
+  private val vectorAddE4m3InputA: Seq[Int] =
+    packFp8Words(Seq(1.0f, -0.5f, 2.0f, 3.0f, -4.0f, 0.25f, 5.5f, -6.5f), LowPrecisionCodec.floatToE4m3BitsSatFinite)
+
+  private val vectorAddE4m3InputB: Seq[Int] =
+    packFp8Words(Seq(0.5f, 1.5f, -1.0f, 2.5f, 0.75f, -0.25f, -2.5f, 4.0f), LowPrecisionCodec.floatToE4m3BitsSatFinite)
+
+  private val vectorAddE4m3Expected: Seq[Int] =
+    packedFp8AddExpected(
+      vectorAddE4m3InputA,
+      vectorAddE4m3InputB,
+      LowPrecisionCodec.e4m3BitsToFloat,
+      LowPrecisionCodec.floatToE4m3BitsSatFinite
+    )
+
+  private val vectorAddE5m2InputA: Seq[Int] =
+    packFp8Words(Seq(1.0f, -0.5f, 8.0f, 3.0f, -10.0f, 0.25f, 12.0f, -16.0f), LowPrecisionCodec.floatToE5m2BitsSatFinite)
+
+  private val vectorAddE5m2InputB: Seq[Int] =
+    packFp8Words(Seq(0.5f, 1.5f, -4.0f, 2.5f, 1.0f, -0.25f, -3.0f, 8.0f), LowPrecisionCodec.floatToE5m2BitsSatFinite)
+
+  private val vectorAddE5m2Expected: Seq[Int] =
+    packedFp8AddExpected(
+      vectorAddE5m2InputA,
+      vectorAddE5m2InputB,
+      LowPrecisionCodec.e5m2BitsToFloat,
+      LowPrecisionCodec.floatToE5m2BitsSatFinite
+    )
+
+  private val matrixMulFp8LogicalA: Seq[Float] = matrixMulInputA(m = 2, k = 4)
+  private val matrixMulFp8LogicalB: Seq[Float] = matrixMulInputB(k = 4, n = 2)
+
+  private val matrixMulE4m3PackedA: Seq[Int] =
+    packMatrixRowsAsFp8x2(matrixMulFp8LogicalA, rows = 2, cols = 4, LowPrecisionCodec.floatToE4m3BitsSatFinite)
+
+  private val matrixMulE4m3PackedB: Seq[Int] =
+    packMatrixColsAsFp8x2(matrixMulFp8LogicalB, rows = 4, cols = 2, LowPrecisionCodec.floatToE4m3BitsSatFinite)
+
+  private val matrixMulE5m2PackedA: Seq[Int] =
+    packMatrixRowsAsFp8x2(matrixMulFp8LogicalA, rows = 2, cols = 4, LowPrecisionCodec.floatToE5m2BitsSatFinite)
+
+  private val matrixMulE5m2PackedB: Seq[Int] =
+    packMatrixColsAsFp8x2(matrixMulFp8LogicalB, rows = 4, cols = 2, LowPrecisionCodec.floatToE5m2BitsSatFinite)
+
+  private def matrixMulPackedFp8Expected(
+      aLogical: Seq[Float],
+      bLogical: Seq[Float],
+      m: Int,
+      n: Int,
+      k: Int,
+      quantize: Float => Float
+  ): Seq[Float] = {
+    val a = aLogical.map(quantize)
+    val b = bLogical.map(quantize)
+    for {
+      row <- 0 until m
+      col <- 0 until n
+    } yield {
+      var sum = 0.0f
+      var kk = 0
+      while (kk < k) {
+        sum = sum + (a(row * k + kk) * b(kk * n + col))
+        kk += 1
+      }
+      sum
+    }
+  }
+
+  private val matrixMulE4m3Expected: Seq[Float] =
+    matrixMulPackedFp8Expected(matrixMulFp8LogicalA, matrixMulFp8LogicalB, m = 2, n = 2, k = 4, quantizeE4m3ToHalfFloat)
+
+  private val matrixMulE5m2Expected: Seq[Float] =
+    matrixMulPackedFp8Expected(matrixMulFp8LogicalA, matrixMulFp8LogicalB, m = 2, n = 2, k = 4, quantizeE5m2ToHalfFloat)
 
   val addStoreExit: KernelCase = KernelCase(
     name = "add_store_exit",
@@ -521,6 +741,184 @@ object KernelCorpus {
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
+  val scalarAddF16: KernelCase = KernelCase(
+    name = "scalar_add_f16",
+    relativeSourcePath = "arithmetic/scalar_add_f16.ptx",
+    purpose = "Add one FP16 scalar from each input array per thread and store the FP16 result.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x6A0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF16(base = 0x8000, values = scalarAddF16InputA),
+      WriteDataF16(base = 0x8200, values = scalarAddF16InputB),
+      WriteArgBuffer(base = 0x6A0, values = Seq(0x8000L, 0x8200L, 0x8400L))
+    ),
+    expectation = Success(checks = Seq(ExpectF16(base = 0x8400, values = scalarAddF16Expected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val vectorAddF16x2: KernelCase = KernelCase(
+    name = "vector_add_f16x2",
+    relativeSourcePath = "arithmetic/vector_add_f16x2.ptx",
+    purpose = "Add one packed FP16x2 value from each input array per thread and store the packed result.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, argBase = 0x6C0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0x8600, values = vectorAddF16x2InputA.map(word32)),
+      WriteDataWords(base = 0x8700, values = vectorAddF16x2InputB.map(word32)),
+      WriteArgBuffer(base = 0x6C0, values = Seq(0x8600L, 0x8700L, 0x8800L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x8800, values = vectorAddF16x2Expected.map(word32)))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val matrixAddF16: KernelCase = KernelCase(
+    name = "matrix_add_f16",
+    relativeSourcePath = "arithmetic/matrix_add_f16.ptx",
+    purpose = "Add two FP16 row-major matrices using 2D thread coordinates and store an FP16 matrix result.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, blockDimY = 4, argBase = 0x6E0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataF16(base = 0x8A00, values = matrixAddF16InputA(rows = 4, cols = 4)),
+      WriteDataF16(base = 0x8C00, values = matrixAddF16InputB(rows = 4, cols = 4)),
+      WriteArgBuffer(base = 0x6E0, values = Seq(0x8A00L, 0x8C00L, 0x8E00L, 4L, 4L, 4L, 4L, 4L))
+    ),
+    expectation = Success(checks = Seq(ExpectF16(base = 0x8E00, values = matrixAddF16Expected(rows = 4, cols = 4)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val matrixMulF16AccumF32: KernelCase = KernelCase(
+    name = "matrix_mul_f16_accum_f32",
+    relativeSourcePath = "arithmetic/matrix_mul_f16_accum_f32.ptx",
+    purpose = "Multiply two FP16 input matrices with FP32 accumulation and store an FP32 output matrix.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 2, blockDimY = 2, argBase = 0x700),
+    timeoutCycles = 80000,
+    preloadOps = Seq(
+      WriteDataF16(base = 0x9000, values = matrixMulF16InputA(m = 2, k = 4)),
+      WriteDataF16(base = 0x9200, values = matrixMulF16InputB(k = 4, n = 2)),
+      WriteArgBuffer(base = 0x700, values = Seq(0x9000L, 0x9200L, 0x9400L, 2L, 2L, 4L, 4L, 2L, 2L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x9400, values = matrixMulF16Expected(m = 2, n = 2, k = 4)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val scalarConvertE4m3x2F16x2: KernelCase = KernelCase(
+    name = "scalar_convert_e4m3x2_f16x2",
+    relativeSourcePath = "arithmetic/scalar_convert_e4m3x2_f16x2.ptx",
+    purpose = "Convert one packed E4M3x2 value per thread into one packed F16x2 value.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, argBase = 0x720),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataPacked16(base = 0x9800, values = scalarConvertE4m3Input),
+      WriteArgBuffer(base = 0x720, values = Seq(0x9800L, 0x9900L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x9900, values = scalarConvertE4m3Expected.map(word32)))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val scalarConvertE5m2x2F16x2: KernelCase = KernelCase(
+    name = "scalar_convert_e5m2x2_f16x2",
+    relativeSourcePath = "arithmetic/scalar_convert_e5m2x2_f16x2.ptx",
+    purpose = "Convert one packed E5M2x2 value per thread into one packed F16x2 value.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, argBase = 0x740),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataPacked16(base = 0x9A00, values = scalarConvertE5m2Input),
+      WriteArgBuffer(base = 0x740, values = Seq(0x9A00L, 0x9B00L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x9B00, values = scalarConvertE5m2Expected.map(word32)))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val vectorAddE4m3x2: KernelCase = KernelCase(
+    name = "vector_add_e4m3x2",
+    relativeSourcePath = "arithmetic/vector_add_e4m3x2.ptx",
+    purpose = "Add one packed E4M3x2 vector from each input array per thread and store one packed E4M3x2 result.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, argBase = 0x760),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataPacked16(base = 0x9C00, values = vectorAddE4m3InputA),
+      WriteDataPacked16(base = 0x9D00, values = vectorAddE4m3InputB),
+      WriteArgBuffer(base = 0x760, values = Seq(0x9C00L, 0x9D00L, 0x9E00L))
+    ),
+    expectation = Success(checks = Seq(ExpectPacked16(base = 0x9E00, values = vectorAddE4m3Expected))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val vectorAddE5m2x2: KernelCase = KernelCase(
+    name = "vector_add_e5m2x2",
+    relativeSourcePath = "arithmetic/vector_add_e5m2x2.ptx",
+    purpose = "Add one packed E5M2x2 vector from each input array per thread and store one packed E5M2x2 result.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, argBase = 0x780),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataPacked16(base = 0xA000, values = vectorAddE5m2InputA),
+      WriteDataPacked16(base = 0xA100, values = vectorAddE5m2InputB),
+      WriteArgBuffer(base = 0x780, values = Seq(0xA000L, 0xA100L, 0xA200L))
+    ),
+    expectation = Success(checks = Seq(ExpectPacked16(base = 0xA200, values = vectorAddE5m2Expected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val matrixMulE4m3x2AccumF32: KernelCase = KernelCase(
+    name = "matrix_mul_e4m3x2_accum_f32",
+    relativeSourcePath = "arithmetic/matrix_mul_e4m3x2_accum_f32.ptx",
+    purpose = "Multiply two packed E4M3x2 input matrices with FP32 accumulation and store an FP32 output matrix.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 2, blockDimY = 2, argBase = 0x7A0),
+    timeoutCycles = 80000,
+    preloadOps = Seq(
+      WriteDataPacked16(base = 0xA400, values = matrixMulE4m3PackedA),
+      WriteDataPacked16(base = 0xA600, values = matrixMulE4m3PackedB),
+      WriteArgBuffer(base = 0x7A0, values = Seq(0xA400L, 0xA600L, 0xA800L, 2L, 2L, 2L, 2L, 2L, 2L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0xA800, values = matrixMulE4m3Expected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val matrixMulE5m2x2AccumF32: KernelCase = KernelCase(
+    name = "matrix_mul_e5m2x2_accum_f32",
+    relativeSourcePath = "arithmetic/matrix_mul_e5m2x2_accum_f32.ptx",
+    purpose = "Multiply two packed E5M2x2 input matrices with FP32 accumulation and store an FP32 output matrix.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 2, blockDimY = 2, argBase = 0x7C0),
+    timeoutCycles = 80000,
+    preloadOps = Seq(
+      WriteDataPacked16(base = 0xAA00, values = matrixMulE5m2PackedA),
+      WriteDataPacked16(base = 0xAC00, values = matrixMulE5m2PackedB),
+      WriteArgBuffer(base = 0x7C0, values = Seq(0xAA00L, 0xAC00L, 0xAE00L, 2L, 2L, 2L, 2L, 2L, 2L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0xAE00, values = matrixMulE5m2Expected))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
   val reluClampF32: KernelCase = KernelCase(
     name = "relu_clamp_f32",
     relativeSourcePath = "arithmetic/relu_clamp_f32.ptx",
@@ -731,6 +1129,16 @@ object KernelCorpus {
     matrixTransposeF32,
     matrixAddF32,
     matrixMulF32,
+    scalarAddF16,
+    vectorAddF16x2,
+    matrixAddF16,
+    matrixMulF16AccumF32,
+    scalarConvertE4m3x2F16x2,
+    scalarConvertE5m2x2F16x2,
+    vectorAddE4m3x2,
+    vectorAddE5m2x2,
+    matrixMulE4m3x2AccumF32,
+    matrixMulE5m2x2AccumF32,
     reluClampF32,
     linearBiasReluF32,
     hingeStepF32,

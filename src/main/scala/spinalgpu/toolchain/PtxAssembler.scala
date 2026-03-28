@@ -136,6 +136,36 @@ object PtxAssembler {
     }
   }
 
+  private final case class RegisterUnaryInstruction(opcode: Int, destination: String, source: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(Isa.encodeRrr(opcode, rd = layout.requireRegister(destination), rs0 = layout.requireRegister(source), rs1 = 0))
+  }
+
+  private final case class RegisterBinaryInstruction(opcode: Int, destination: String, lhs: String, rhs: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(Isa.encodeRrr(opcode, rd = layout.requireRegister(destination), rs0 = layout.requireRegister(lhs), rs1 = layout.requireRegister(rhs)))
+  }
+
+  private final case class RegisterFmaInstruction(opcode: Int, destination: String, lhs: String, rhs: String, accumulate: String)
+      extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(
+        Isa.encodeRrrr(
+          opcode,
+          rd = layout.requireRegister(destination),
+          rs0 = layout.requireRegister(lhs),
+          rs1 = layout.requireRegister(rhs),
+          rs2 = layout.requireRegister(accumulate)
+        )
+      )
+  }
+
   private final case class FmaInstruction(destination: String, lhs: String, rhs: String, accumulate: String) extends PtxInstruction {
     override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
 
@@ -178,7 +208,8 @@ object PtxAssembler {
     }
   }
 
-  private final case class LoadInstruction(addressSpace: String, destination: String, source: MemoryOperand) extends PtxInstruction {
+  private final case class LoadInstruction(addressSpace: String, destination: String, source: MemoryOperand, accessWidthBytes: Int = 4)
+      extends PtxInstruction {
     override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int =
       addressSpace match {
         case "param" => 2
@@ -198,15 +229,17 @@ object PtxAssembler {
           )
         case "global" =>
           val (prefix, base, immediate) = lowerStandardMemoryAddress(source, layout, context, allowSharedSymbol = false)
-          prefix :+ Isa.encodeMem(Opcode.LDG, reg = rd, base = base, offset = immediate)
+          prefix :+ Isa.encodeMem(if (accessWidthBytes == 2) Opcode.LDG16 else Opcode.LDG, reg = rd, base = base, offset = immediate)
         case "shared" =>
+          require(accessWidthBytes == 4, "shared-memory loads only support 32-bit accesses")
           val (prefix, base, immediate) = lowerStandardMemoryAddress(source, layout, context, allowSharedSymbol = true)
           prefix :+ Isa.encodeMem(Opcode.LDS, reg = rd, base = base, offset = immediate)
       }
     }
   }
 
-  private final case class StoreInstruction(addressSpace: String, destination: MemoryOperand, source: String) extends PtxInstruction {
+  private final case class StoreInstruction(addressSpace: String, destination: MemoryOperand, source: String, accessWidthBytes: Int = 4)
+      extends PtxInstruction {
     override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int =
       addressSpace match {
         case "global" => lowerStandardMemoryAddress(destination, layout, context, allowSharedSymbol = false)._1.length + 1
@@ -219,8 +252,9 @@ object PtxAssembler {
       addressSpace match {
         case "global" =>
           val (prefix, base, immediate) = lowerStandardMemoryAddress(destination, layout, context, allowSharedSymbol = false)
-          prefix :+ Isa.encodeMem(Opcode.STG, reg = rs, base = base, offset = immediate)
+          prefix :+ Isa.encodeMem(if (accessWidthBytes == 2) Opcode.STG16 else Opcode.STG, reg = rs, base = base, offset = immediate)
         case "shared" =>
+          require(accessWidthBytes == 4, "shared-memory stores only support 32-bit accesses")
           val (prefix, base, immediate) = lowerStandardMemoryAddress(destination, layout, context, allowSharedSymbol = true)
           prefix :+ Isa.encodeMem(Opcode.STS, reg = rs, base = base, offset = immediate)
       }
@@ -439,18 +473,36 @@ object PtxAssembler {
   private final case class RegisterLayout(
       integerRegisters: Map[String, Int],
       floatRegisters: Map[String, Int],
+      halfRegisters: Map[String, Int],
+      half2Registers: Map[String, Int],
+      b16Registers: Map[String, Int],
       wideRegisters: Map[String, (Int, Int)],
       predicateRegisters: Map[String, Int],
       scratchRegister: Int
   ) {
     def requireRegister(name: String): Int =
-      integerRegisters.get(name).orElse(floatRegisters.get(name)).getOrElse(throw new IllegalArgumentException(s"unknown PTX register: $name"))
+      integerRegisters
+        .get(name)
+        .orElse(floatRegisters.get(name))
+        .orElse(halfRegisters.get(name))
+        .orElse(half2Registers.get(name))
+        .orElse(b16Registers.get(name))
+        .getOrElse(throw new IllegalArgumentException(s"unknown PTX register: $name"))
 
     def requireIntegerRegister(name: String): Int =
       integerRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX integer register: $name"))
 
     def requireFloatRegister(name: String): Int =
       floatRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX float register: $name"))
+
+    def requireHalfRegister(name: String): Int =
+      halfRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX f16 register: $name"))
+
+    def requireHalf2Register(name: String): Int =
+      half2Registers.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX f16x2 register: $name"))
+
+    def requireB16Register(name: String): Int =
+      b16Registers.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX b16 register: $name"))
 
     def requireWideRegister(name: String): (Int, Int) =
       wideRegisters.getOrElse(name, throw new IllegalArgumentException(s"unknown PTX 64-bit register: $name"))
@@ -467,6 +519,9 @@ object PtxAssembler {
     val layout = allocateRegisters(
       parsed.declaredIntegerRegisterCount,
       parsed.declaredFloatRegisterCount,
+      parsed.declaredHalfRegisterCount,
+      parsed.declaredHalf2RegisterCount,
+      parsed.declaredB16RegisterCount,
       parsed.declaredWideRegisterCount,
       parsed.declaredPredicateCount
     )
@@ -507,6 +562,9 @@ object PtxAssembler {
   private final case class ParsedModule(
       declaredIntegerRegisterCount: Int,
       declaredFloatRegisterCount: Int,
+      declaredHalfRegisterCount: Int,
+      declaredHalf2RegisterCount: Int,
+      declaredB16RegisterCount: Int,
       declaredWideRegisterCount: Int,
       declaredPredicateCount: Int,
       paramOffsets: Map[String, Int],
@@ -522,6 +580,9 @@ object PtxAssembler {
 
     var declaredIntegerRegisterCount = 0
     var declaredFloatRegisterCount = 0
+    var declaredHalfRegisterCount = 0
+    var declaredHalf2RegisterCount = 0
+    var declaredB16RegisterCount = 0
     var declaredWideRegisterCount = 0
     var declaredPredicateCount = 0
     var nextParamOffset = 0
@@ -652,12 +713,21 @@ object PtxAssembler {
             if (statement.startsWith(".reg ")) {
               val RegisterDecl = """\.reg\s+\.u32\s+%r<(\d+)>""".r
               val FloatRegisterDecl = """\.reg\s+\.f32\s+%f<(\d+)>""".r
+              val HalfRegisterDecl = """\.reg\s+\.f16\s+%h<(\d+)>""".r
+              val Half2RegisterDecl = """\.reg\s+\.f16x2\s+%x<(\d+)>""".r
+              val B16RegisterDecl = """\.reg\s+\.b16\s+%b<(\d+)>""".r
               val WideRegisterDecl = """\.reg\s+\.u64\s+%rd<(\d+)>""".r
               statement match {
                 case RegisterDecl(count) =>
                   declaredIntegerRegisterCount += count.toInt
                 case FloatRegisterDecl(count) =>
                   declaredFloatRegisterCount += count.toInt
+                case HalfRegisterDecl(count) =>
+                  declaredHalfRegisterCount += count.toInt
+                case Half2RegisterDecl(count) =>
+                  declaredHalf2RegisterCount += count.toInt
+                case B16RegisterDecl(count) =>
+                  declaredB16RegisterCount += count.toInt
                 case WideRegisterDecl(count) =>
                   declaredWideRegisterCount += count.toInt
                 case _ =>
@@ -705,6 +775,9 @@ object PtxAssembler {
     ParsedModule(
       declaredIntegerRegisterCount = declaredIntegerRegisterCount,
       declaredFloatRegisterCount = declaredFloatRegisterCount,
+      declaredHalfRegisterCount = declaredHalfRegisterCount,
+      declaredHalf2RegisterCount = declaredHalf2RegisterCount,
+      declaredB16RegisterCount = declaredB16RegisterCount,
       declaredWideRegisterCount = declaredWideRegisterCount,
       declaredPredicateCount = declaredPredicateCount,
       paramOffsets = params.toMap,
@@ -726,9 +799,36 @@ object PtxAssembler {
       trimmed
     }
 
+    def parseHalfRegisterName(token: String): String = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("%h"), s"expected %h register, got: $trimmed")
+      trimmed
+    }
+
+    def parseHalf2RegisterName(token: String): String = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("%x"), s"expected %x register, got: $trimmed")
+      trimmed
+    }
+
+    def parseB16RegisterName(token: String): String = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("%b"), s"expected %b register, got: $trimmed")
+      trimmed
+    }
+
     def parsePredicateName(token: String): String = {
       val trimmed = token.trim
       require(trimmed.startsWith("%p"), s"expected %p predicate, got: $trimmed")
+      trimmed
+    }
+
+    def parseAnyRegisterName(token: String): String = {
+      val trimmed = token.trim
+      require(
+        trimmed.startsWith("%r") || trimmed.startsWith("%f") || trimmed.startsWith("%h") || trimmed.startsWith("%x") || trimmed.startsWith("%b"),
+        s"expected PTX scalar register, got: $trimmed"
+      )
       trimmed
     }
 
@@ -751,6 +851,15 @@ object PtxAssembler {
         ImmediateOperand(0)
       } else {
         throw new IllegalArgumentException(s"PTX line $lineNumber: mov.f32 only supports %f registers and 0f00000000 immediates")
+      }
+    }
+
+    def parseTypedRegisterOperand(token: String, prefix: String, kind: String): ValueOperand = {
+      val trimmed = token.trim
+      if (trimmed.startsWith(prefix)) {
+        RegisterOperand(trimmed)
+      } else {
+        throw new IllegalArgumentException(s"PTX line $lineNumber: $kind only supports $prefix registers")
       }
     }
 
@@ -871,9 +980,18 @@ object PtxAssembler {
               case "mov.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 MovInstruction(destination, parseMovOperand(source))
+              case "mov.b32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                MovInstruction(parseAnyRegisterName(destination), RegisterOperand(parseAnyRegisterName(source)))
               case "mov.f32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 MovInstruction(parseFloatRegisterName(destination), parseFloatMovOperand(source))
+              case "mov.f16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                MovInstruction(parseHalfRegisterName(destination), RegisterOperand(parseAnyRegisterName(source)))
+              case "mov.f16x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                MovInstruction(parseHalf2RegisterName(destination), parseTypedRegisterOperand(source, "%x", "mov.f16x2"))
               case "mov.u64" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 MoveWideSpecialInstruction(destination, source)
@@ -921,6 +1039,21 @@ object PtxAssembler {
               case "mul.f32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 FloatBinaryInstruction(Opcode.FMUL, parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs))
+              case "add.rn.f16" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                RegisterBinaryInstruction(Opcode.HADD, parseHalfRegisterName(destination), parseHalfRegisterName(lhs), parseHalfRegisterName(rhs))
+              case "mul.rn.f16" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                RegisterBinaryInstruction(Opcode.HMUL, parseHalfRegisterName(destination), parseHalfRegisterName(lhs), parseHalfRegisterName(rhs))
+              case "fma.rn.f16" =>
+                val Seq(destination, lhs, rhs, accumulate) = parseOperands(rest, 4)
+                RegisterFmaInstruction(Opcode.HFMA, parseHalfRegisterName(destination), parseHalfRegisterName(lhs), parseHalfRegisterName(rhs), parseHalfRegisterName(accumulate))
+              case "add.rn.f16x2" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                RegisterBinaryInstruction(Opcode.HADD2, parseHalf2RegisterName(destination), parseHalf2RegisterName(lhs), parseHalf2RegisterName(rhs))
+              case "mul.rn.f16x2" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                RegisterBinaryInstruction(Opcode.HMUL2, parseHalf2RegisterName(destination), parseHalf2RegisterName(lhs), parseHalf2RegisterName(rhs))
               case "sub.f32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 FloatBinaryInstruction(Opcode.FSUB, parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs))
@@ -1040,6 +1173,15 @@ object PtxAssembler {
               case "ld.global.f32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 LoadInstruction("global", parseFloatRegisterName(destination), parseMemoryOperand(source))
+              case "ld.global.f16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                LoadInstruction("global", parseHalfRegisterName(destination), parseMemoryOperand(source), accessWidthBytes = 2)
+              case "ld.global.f16x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                LoadInstruction("global", parseHalf2RegisterName(destination), parseMemoryOperand(source))
+              case "ld.global.b16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                LoadInstruction("global", parseB16RegisterName(destination), parseMemoryOperand(source), accessWidthBytes = 2)
               case "ld.global.v2.f32" =>
                 val Seq(destinationTuple, source) = parseOperands(rest, 2)
                 val destinations = parseFloatRegisterTuple(destinationTuple, 2)
@@ -1060,6 +1202,15 @@ object PtxAssembler {
               case "st.global.f32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreInstruction("global", parseMemoryOperand(destination), parseFloatRegisterName(source))
+              case "st.global.f16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                StoreInstruction("global", parseMemoryOperand(destination), parseHalfRegisterName(source), accessWidthBytes = 2)
+              case "st.global.f16x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                StoreInstruction("global", parseMemoryOperand(destination), parseHalf2RegisterName(source))
+              case "st.global.b16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                StoreInstruction("global", parseMemoryOperand(destination), parseB16RegisterName(source), accessWidthBytes = 2)
               case "st.global.v2.f32" =>
                 val Seq(destination, sourceTuple) = parseOperands(rest, 2)
                 val memory = parseMemoryOperand(destination)
@@ -1083,6 +1234,24 @@ object PtxAssembler {
               case "st.shared.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 StoreInstruction("shared", parseMemoryOperand(destination), source)
+              case "cvt.f32.f16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.CVTF32F16, parseFloatRegisterName(destination), parseHalfRegisterName(source))
+              case "cvt.rn.f16.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.CVTF16F32, parseHalfRegisterName(destination), parseFloatRegisterName(source))
+              case "cvt.rn.f16x2.e4m3x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.CVTF16X2E4M3X2, parseHalf2RegisterName(destination), parseB16RegisterName(source))
+              case "cvt.rn.f16x2.e5m2x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.CVTF16X2E5M2X2, parseHalf2RegisterName(destination), parseB16RegisterName(source))
+              case "cvt.satfinite.e4m3x2.f16x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.CVTE4M3X2F16X2, parseB16RegisterName(destination), parseHalf2RegisterName(source))
+              case "cvt.satfinite.e5m2x2.f16x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.CVTE5M2X2F16X2, parseB16RegisterName(destination), parseHalf2RegisterName(source))
               case "bra" =>
                 BranchInstruction(rest.trim)
               case _ =>
@@ -1097,18 +1266,32 @@ object PtxAssembler {
   private def allocateRegisters(
       declaredIntegerRegisterCount: Int,
       declaredFloatRegisterCount: Int,
+      declaredHalfRegisterCount: Int,
+      declaredHalf2RegisterCount: Int,
+      declaredB16RegisterCount: Int,
       declaredWideRegisterCount: Int,
       declaredPredicateCount: Int
   ): RegisterLayout = {
     val usableRegisterCount = Isa.registerCount - 1
     require(declaredIntegerRegisterCount >= 0, "declared PTX integer register count must be non-negative")
     require(declaredFloatRegisterCount >= 0, "declared PTX float register count must be non-negative")
+    require(declaredHalfRegisterCount >= 0, "declared PTX f16 register count must be non-negative")
+    require(declaredHalf2RegisterCount >= 0, "declared PTX f16x2 register count must be non-negative")
+    require(declaredB16RegisterCount >= 0, "declared PTX b16 register count must be non-negative")
     require(declaredWideRegisterCount >= 0, "declared PTX 64-bit register count must be non-negative")
     require(declaredPredicateCount >= 0, "declared PTX predicate count must be non-negative")
-    val requiredRegisters = declaredIntegerRegisterCount + declaredFloatRegisterCount + (declaredWideRegisterCount * 2) + declaredPredicateCount + 1
+    val requiredRegisters =
+      declaredIntegerRegisterCount +
+        declaredFloatRegisterCount +
+        declaredHalfRegisterCount +
+        declaredHalf2RegisterCount +
+        declaredB16RegisterCount +
+        (declaredWideRegisterCount * 2) +
+        declaredPredicateCount +
+        1
     require(
       requiredRegisters <= usableRegisterCount,
-      s"PTX source declares $declaredIntegerRegisterCount integer registers, $declaredFloatRegisterCount float registers, $declaredWideRegisterCount 64-bit registers, and $declaredPredicateCount predicates, but only $usableRegisterCount hardware registers are available including one scratch register"
+      s"PTX source declares $declaredIntegerRegisterCount integer registers, $declaredFloatRegisterCount float registers, $declaredHalfRegisterCount f16 registers, $declaredHalf2RegisterCount f16x2 registers, $declaredB16RegisterCount b16 registers, $declaredWideRegisterCount 64-bit registers, and $declaredPredicateCount predicates, but only $usableRegisterCount hardware registers are available including one scratch register"
     )
 
     var nextRegister = 1
@@ -1124,6 +1307,24 @@ object PtxAssembler {
         nextRegister += 1
         s"%f$index" -> allocated
       }.toMap
+    val halfRegisters =
+      (0 until declaredHalfRegisterCount).map { index =>
+        val allocated = nextRegister
+        nextRegister += 1
+        s"%h$index" -> allocated
+      }.toMap
+    val half2Registers =
+      (0 until declaredHalf2RegisterCount).map { index =>
+        val allocated = nextRegister
+        nextRegister += 1
+        s"%x$index" -> allocated
+      }.toMap
+    val b16Registers =
+      (0 until declaredB16RegisterCount).map { index =>
+        val allocated = nextRegister
+        nextRegister += 1
+        s"%b$index" -> allocated
+      }.toMap
     val wideRegisters =
       (0 until declaredWideRegisterCount).map { index =>
         val low = nextRegister
@@ -1137,7 +1338,7 @@ object PtxAssembler {
         s"%p$index" -> allocated
       }.toMap
     val scratchRegister = nextRegister
-    RegisterLayout(integerRegisters, floatRegisters, wideRegisters, predicateRegisters, scratchRegister)
+    RegisterLayout(integerRegisters, floatRegisters, halfRegisters, half2Registers, b16Registers, wideRegisters, predicateRegisters, scratchRegister)
   }
 
   private def assignLabelAddresses(body: Seq[BodyItem], layout: RegisterLayout, context: ModuleContext): Map[String, Int] = {

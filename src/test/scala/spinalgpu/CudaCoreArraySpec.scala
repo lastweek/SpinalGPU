@@ -13,6 +13,8 @@ class CudaCoreArraySpec extends AnyFunSuite with Matchers {
     sharedMemoryBytes = 256
   )
   private val subwarpSliceCount = config.warpSize / config.cudaLaneCount
+  private def u32(value: Int): BigInt = BigInt(value.toLong & 0xFFFFFFFFL)
+  private def u16(value: Int): BigInt = BigInt(value & 0xFFFF)
 
   private def initDefaults(dut: CudaCoreArray): Unit = {
     dut.io.issue.valid #= false
@@ -226,6 +228,148 @@ class CudaCoreArraySpec extends AnyFunSuite with Matchers {
       waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
       dut.io.response.payload.result(0).toBigInt shouldBe BigInt(1)
       dut.io.response.payload.result(1).toBigInt shouldBe BigInt(0)
+      dut.io.response.ready #= true
+    }
+  }
+
+  test("FP16 scalar and packed ops plus FP8 conversion ops return exact lane results") {
+    SimConfig.withVerilator.compile(new CudaCoreArray(config)).doSim { dut =>
+      implicit val implicitDut: CudaCoreArray = dut
+      dut.clockDomain.forkStimulus(period = 10)
+      initDefaults(dut)
+
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.HADD
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= LowPrecisionCodec.floatToHalfBits(1.0f)
+      dut.io.issue.payload.operandB(0) #= LowPrecisionCodec.floatToHalfBits(2.0f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fp16ScalarLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(LowPrecisionCodec.floatToHalfBits(3.0f))
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.HFMA
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= LowPrecisionCodec.floatToHalfBits(1.5f)
+      dut.io.issue.payload.operandB(0) #= LowPrecisionCodec.floatToHalfBits(2.0f)
+      dut.io.issue.payload.operandC(0) #= LowPrecisionCodec.floatToHalfBits(-0.5f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fp16ScalarLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(LowPrecisionCodec.floatToHalfBits(2.5f))
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.HADD2
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= u32(LowPrecisionCodec.packHalf2(
+        LowPrecisionCodec.floatToHalfBits(1.0f),
+        LowPrecisionCodec.floatToHalfBits(-0.5f)
+      ))
+      dut.io.issue.payload.operandB(0) #= u32(LowPrecisionCodec.packHalf2(
+        LowPrecisionCodec.floatToHalfBits(0.5f),
+        LowPrecisionCodec.floatToHalfBits(1.5f)
+      ))
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fp16x2Latency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe u32(
+        LowPrecisionCodec.packHalf2(
+          LowPrecisionCodec.floatToHalfBits(1.5f),
+          LowPrecisionCodec.floatToHalfBits(1.0f)
+        )
+      )
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.CVTF32F16
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= LowPrecisionCodec.floatToHalfBits(1.5f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fp16ScalarLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(ExecutionTestUtils.f32Bits(1.5f))
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.CVTF16F32
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= ExecutionTestUtils.f32Bits(2.25f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fp16ScalarLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(LowPrecisionCodec.floatToHalfBits(2.25f))
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.CVTF16X2E4M3X2
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= u16(LowPrecisionCodec.packFp8x2(
+        LowPrecisionCodec.floatToE4m3BitsSatFinite(1.0f),
+        LowPrecisionCodec.floatToE4m3BitsSatFinite(-0.5f)
+      ))
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fp8ConvertLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe u32(
+        LowPrecisionCodec.packHalf2(
+          LowPrecisionCodec.floatToHalfBits(1.0f),
+          LowPrecisionCodec.floatToHalfBits(-0.5f)
+        )
+      )
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.CVTE5M2X2F16X2
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= u32(LowPrecisionCodec.packHalf2(
+        LowPrecisionCodec.floatToHalfBits(1.0f),
+        LowPrecisionCodec.floatToHalfBits(-0.5f)
+      ))
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fp8ConvertLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe u16(
+        LowPrecisionCodec.packFp8x2(
+          LowPrecisionCodec.floatToE5m2BitsSatFinite(1.0f),
+          LowPrecisionCodec.floatToE5m2BitsSatFinite(-0.5f)
+        )
+      )
       dut.io.response.ready #= true
     }
   }

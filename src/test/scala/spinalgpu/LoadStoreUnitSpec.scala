@@ -36,6 +36,7 @@ class LoadStoreUnitSpec extends AnyFunSuite with Matchers {
     dut.io.issue.payload.warpId #= 0
     dut.io.issue.payload.addressSpace #= AddressSpaceKind.GLOBAL
     dut.io.issue.payload.write #= false
+    dut.io.issue.payload.accessWidth #= MemoryAccessWidthKind.WORD
     dut.io.issue.payload.activeMask #= 0
     dut.io.issue.payload.byteMask #= 0xF
     for (lane <- 0 until config.warpSize) {
@@ -119,6 +120,42 @@ class LoadStoreUnitSpec extends AnyFunSuite with Matchers {
       waitUntil() { dut.io.externalMemReq.valid.toBoolean }
       dut.io.externalMemReq.payload.address.toBigInt shouldBe BigInt(0x108)
       dut.io.externalMemReq.payload.beatCount.toBigInt shouldBe BigInt(1)
+    }
+  }
+
+  test("extracts halfword global loads from narrow bursts") {
+    SimConfig.withVerilator.compile(new LoadStoreUnit(config)).doSim { dut =>
+      implicit val implicitDut: LoadStoreUnit = dut
+      dut.clockDomain.forkStimulus(period = 10)
+      initDefaults(dut)
+
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.activeMask #= 0x03
+      dut.io.issue.payload.accessWidth #= MemoryAccessWidthKind.HALFWORD
+      dut.io.issue.payload.byteMask #= 0x3
+      dut.io.issue.payload.addresses(0) #= 0x100
+      dut.io.issue.payload.addresses(1) #= 0x102
+
+      waitUntil() { dut.io.externalMemReq.valid.toBoolean }
+      dut.io.externalMemReq.payload.address.toBigInt shouldBe BigInt(0x100)
+      dut.io.externalMemReq.payload.beatCount.toBigInt shouldBe BigInt(2)
+      dut.io.externalMemReq.payload.accessWidth.toBigInt shouldBe BigInt(0)
+
+      dut.io.externalMemReq.ready #= true
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.io.externalMemReq.ready #= false
+
+      dut.io.externalMemRsp.valid #= true
+      dut.io.externalMemRsp.payload.warpId #= 0
+      dut.io.externalMemRsp.payload.beatCount #= 2
+      dut.io.externalMemRsp.payload.readData(0) #= BigInt("0000A1B2", 16)
+      dut.io.externalMemRsp.payload.readData(1) #= BigInt("C3D40000", 16)
+      waitUntil() { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.error.toBoolean shouldBe false
+      dut.io.response.payload.readData(0).toBigInt shouldBe BigInt("A1B2", 16)
+      dut.io.response.payload.readData(1).toBigInt shouldBe BigInt("C3D4", 16)
+      dut.io.externalMemRsp.valid #= false
     }
   }
 }

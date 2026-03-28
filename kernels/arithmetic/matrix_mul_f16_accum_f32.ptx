@@ -1,0 +1,106 @@
+// Purpose: Multiply two FP16 input matrices with FP32 accumulation and store an FP32 output matrix.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - One thread computes one output element `C[row, col]`.
+// - The kernel loops over the shared `k` dimension, loads FP16 inputs from A and B, converts them to FP32, and accumulates with `fma.rn.f32`.
+// - Threads outside the output bounds branch directly to the exit path.
+// Where this fits:
+// - This is the first mixed-precision matrix kernel in the corpus.
+// - It demonstrates the common CUDA-core pattern “low-precision inputs, FP32 accumulation, FP32 output” without using tensor instructions.
+// Key model details:
+// - A and B are row-major FP16 matrices stored with 2-byte elements.
+// - C is a row-major FP32 matrix stored with 4-byte elements.
+// - `lda` and `ldb` are measured in FP16 elements; `ldc` is measured in FP32 elements.
+// CUDA-equivalent sketch (.cu):
+// __global__ void matrix_mul_f16_accum_f32(const half* A, const half* B, float* C,
+//                                          unsigned m, unsigned n, unsigned k,
+//                                          unsigned lda, unsigned ldb, unsigned ldc) {
+//   unsigned col = threadIdx.x;
+//   unsigned row = threadIdx.y;
+//   if (row < m && col < n) {
+//     float acc = 0.0f;
+//     for (unsigned kk = 0; kk < k; ++kk) {
+//       acc = fmaf(__half2float(A[row * lda + kk]), __half2float(B[kk * ldb + col]), acc);
+//     }
+//     C[row * ldc + col] = acc;
+//   }
+// }
+// SpinalGPU note:
+// - This is still an untiled one-CTA teaching GEMM. The kernel shows the arithmetic pattern, not the later shared-memory optimization phase.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry matrix_mul_f16_accum_f32(
+    .param .u32 A_ptr,
+    .param .u32 B_ptr,
+    .param .u32 C_ptr,
+    .param .u32 m,
+    .param .u32 n,
+    .param .u32 k,
+    .param .u32 lda,
+    .param .u32 ldb,
+    .param .u32 ldc
+)
+{
+    .reg .u32 %r<18>;
+    .reg .f16 %h<2>;
+    .reg .f32 %f<3>;
+    .pred %p<3>;
+
+// Setup
+    ld.param.u32 %r0, [A_ptr];
+    ld.param.u32 %r1, [B_ptr];
+    ld.param.u32 %r2, [C_ptr];
+    ld.param.u32 %r3, [m];
+    ld.param.u32 %r4, [n];
+    ld.param.u32 %r5, [k];
+    ld.param.u32 %r6, [lda];
+    ld.param.u32 %r7, [ldb];
+    ld.param.u32 %r8, [ldc];
+    mov.u32 %r9, %tid.x;          // Column coordinate.
+    mov.u32 %r10, %tid.y;         // Row coordinate.
+    setp.lt.u32 %p0, %r10, %r3;
+    @!%p0 bra done;
+    setp.lt.u32 %p1, %r9, %r4;
+    @!%p1 bra done;
+    mov.u32 %r11, 0;              // Loop index kk.
+    mov.f32 %f0, 0f00000000;      // FP32 accumulation register.
+
+// Core
+loop:
+    setp.lt.u32 %p2, %r11, %r5;
+    @!%p2 bra store_result;
+
+    mul.lo.u32 %r12, %r10, %r6;   // A row base.
+    add.u32 %r12, %r12, %r11;     // A[row, kk] element index.
+    shl.b32 %r12, %r12, 1;
+    add.u32 %r13, %r0, %r12;
+
+    mul.lo.u32 %r14, %r11, %r7;   // B row-major row base for kk.
+    add.u32 %r14, %r14, %r9;      // B[kk, col] element index.
+    shl.b32 %r14, %r14, 1;
+    add.u32 %r15, %r1, %r14;
+
+    ld.global.f16 %h0, [%r13];
+    ld.global.f16 %h1, [%r15];
+    cvt.f32.f16 %f1, %h0;         // Convert the low-precision multiplicands into the FP32 accumulator domain.
+    cvt.f32.f16 %f2, %h1;
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+
+    add.u32 %r11, %r11, 1;
+    bra loop;
+
+store_result:
+    mul.lo.u32 %r16, %r10, %r8;   // FP32 output row base.
+    add.u32 %r16, %r16, %r9;
+    shl.b32 %r16, %r16, 2;
+    add.u32 %r17, %r2, %r16;
+    st.global.f32 [%r17], %f0;
+
+// Exit
+done:
+    ret;
+}

@@ -1,0 +1,59 @@
+// Purpose: Add one packed E5M2x2 vector from each input array per thread and store one packed E5M2x2 result.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread loads two packed E5M2x2 carriers, converts them to `f16x2`, performs one packed FP16 add, and narrows the result back to E5M2x2.
+// - The kernel touches only one packed word per input and one packed word for the output.
+// - There is no control flow beyond the one-thread-per-carrier mapping.
+// Where this fits:
+// - This complements the E4M3 packed vector-add case for the second official-like FP8 format.
+// - It proves that the pack-convert-compute-pack flow works for both alternate FP8 encodings.
+// Key model details:
+// - Packed carriers are stored every 2 bytes in global memory.
+// - The intermediate arithmetic uses `%x` registers and `add.rn.f16x2`.
+// - The final narrowing uses `satfinite` so large half2 intermediates clamp into the E5M2 finite range.
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_add_e5m2x2(const uint16_t* a_bits, const uint16_t* b_bits, uint16_t* c_bits) {
+//   unsigned i = threadIdx.x;
+//   c_bits[i] = convert_half2_to_e5m2x2_satfinite(add_half2(convert_e5m2x2_to_half2(a_bits[i]),
+//                                                            convert_e5m2x2_to_half2(b_bits[i])));
+// }
+// SpinalGPU note:
+// - This kernel still runs on the CUDA-core path; no tensor-core behavior is involved.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_add_e5m2x2(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 c_ptr
+)
+{
+    .reg .u32 %r<7>;
+    .reg .b16 %b<3>;
+    .reg .f16x2 %x<3>;
+
+// Setup
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [c_ptr];
+    mov.u32 %r3, %tid.x;
+    shl.b32 %r4, %r3, 1;
+    add.u32 %r5, %r0, %r4;
+    add.u32 %r6, %r1, %r4;
+    add.u32 %r4, %r2, %r4;
+
+// Core
+    ld.global.b16 %b0, [%r5];
+    ld.global.b16 %b1, [%r6];
+    cvt.rn.f16x2.e5m2x2 %x0, %b0;
+    cvt.rn.f16x2.e5m2x2 %x1, %b1;
+    add.rn.f16x2 %x2, %x0, %x1;
+    cvt.satfinite.e5m2x2.f16x2 %b2, %x2;
+    st.global.b16 [%r4], %b2;
+
+// Exit
+    ret;
+}

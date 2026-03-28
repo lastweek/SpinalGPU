@@ -6,6 +6,7 @@ import scala.math.BigInt
 import spinal.core.ClockDomain
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
+import spinal.lib.bus.amba4.axilite.AxiLite4
 import spinal.lib.bus.amba4.axilite.sim._
 import spinalgpu.toolchain.BuildKernelCorpus
 import spinalgpu.toolchain.KernelBinaryIO
@@ -69,40 +70,133 @@ object ExecutionTestUtils {
     }
   }
 
-  def writeRegister(driver: AxiLite4Driver, address: Int, data: BigInt): Unit = {
-    driver.write(BigInt(address), data)
+  def writeDataF16(memory: AxiMemorySim, base: Long, values: Seq[Int]): Unit = {
+    values.zipWithIndex.foreach { case (value, index) =>
+      writeWord(memory, base + (index.toLong * 2L), BigInt(value & 0xFFFF), byteCount = 2)
+    }
   }
 
-  def readRegister(driver: AxiLite4Driver, address: Int): BigInt = {
-    driver.read(BigInt(address))
+  def writeDataPacked16(memory: AxiMemorySim, base: Long, values: Seq[Int]): Unit = {
+    values.zipWithIndex.foreach { case (value, index) =>
+      writeWord(memory, base + (index.toLong * 2L), BigInt(value & 0xFFFF), byteCount = 2)
+    }
   }
 
-  def submitKernelCommand(driver: AxiLite4Driver, command: KernelCorpus.KernelCommand): Unit = {
-    writeRegister(driver, ControlRegisters.EntryPc, BigInt(command.entryPc))
-    writeRegister(driver, ControlRegisters.GridDimX, BigInt(command.gridDimX))
-    writeRegister(driver, ControlRegisters.GridDimY, BigInt(command.gridDimY))
-    writeRegister(driver, ControlRegisters.GridDimZ, BigInt(command.gridDimZ))
-    writeRegister(driver, ControlRegisters.BlockDimX, BigInt(command.blockDimX))
-    writeRegister(driver, ControlRegisters.BlockDimY, BigInt(command.blockDimY))
-    writeRegister(driver, ControlRegisters.BlockDimZ, BigInt(command.blockDimZ))
-    writeRegister(driver, ControlRegisters.ArgBase, BigInt(command.argBase))
-    writeRegister(driver, ControlRegisters.SharedBytes, BigInt(command.sharedBytes))
-    writeRegister(driver, ControlRegisters.Control, BigInt(1))
+  def idleAxiLite(bus: AxiLite4): Unit = {
+    bus.aw.valid #= false
+    bus.aw.addr #= 0
+    bus.aw.prot #= 0
+    bus.w.valid #= false
+    bus.w.data #= 0
+    bus.w.strb #= 0
+    bus.b.ready #= false
+    bus.ar.valid #= false
+    bus.ar.addr #= 0
+    bus.ar.prot #= 0
+    bus.r.ready #= false
   }
 
-  def clearDone(driver: AxiLite4Driver): Unit = {
-    writeRegister(driver, ControlRegisters.Control, BigInt(2))
+  def initializeAxiLiteMaster(bus: AxiLite4, clockDomain: ClockDomain): Unit = {
+    idleAxiLite(bus)
+    clockDomain.waitSampling(2)
   }
 
-  def readExecutionStatus(driver: AxiLite4Driver): BigInt = {
-    readRegister(driver, ControlRegisters.Status)
+  def writeRegister(bus: AxiLite4, clockDomain: ClockDomain, address: Int, data: BigInt, timeoutCycles: Int = 256): Unit = {
+    idleAxiLite(bus)
+
+    val fullStrb = (BigInt(1) << bus.w.strb.getWidth) - 1
+    bus.aw.valid #= true
+    bus.aw.addr #= address
+    bus.aw.prot #= 0
+
+    var cycles = 0
+    var awDone = false
+    while (!awDone && cycles < timeoutCycles) {
+      val awWillFire = bus.aw.ready.toBoolean
+      clockDomain.waitSampling()
+      cycles += 1
+      if (awWillFire) {
+        awDone = true
+        bus.aw.valid #= false
+      }
+    }
+    assert(awDone, f"AXI-Lite write address handshake to 0x$address%X timed out after $cycles cycles")
+
+    bus.w.valid #= true
+    bus.w.data #= data
+    bus.w.strb #= fullStrb
+    bus.b.ready #= true
+    cycles = 0
+    while (!bus.b.valid.toBoolean && cycles < timeoutCycles) {
+      clockDomain.waitSampling()
+      cycles += 1
+    }
+    assert(
+      bus.b.valid.toBoolean,
+      f"AXI-Lite write data/response path for 0x$address%X timed out after $cycles cycles"
+    )
+    val resp = bus.b.resp.toBigInt
+    bus.w.valid #= false
+    clockDomain.waitSampling()
+    bus.b.ready #= false
+    idleAxiLite(bus)
+    assert(resp == 0, f"AXI-Lite write to 0x$address%X returned error response 0x$resp%X")
   }
 
-  def readFaultCode(driver: AxiLite4Driver): BigInt = {
-    readRegister(driver, ControlRegisters.FaultCode)
+  def readRegister(bus: AxiLite4, clockDomain: ClockDomain, address: Int, timeoutCycles: Int = 256): BigInt = {
+    idleAxiLite(bus)
+
+    bus.ar.valid #= true
+    bus.ar.addr #= address
+    bus.ar.prot #= 0
+    bus.r.ready #= true
+
+    var cycles = 0
+    while (!bus.r.valid.toBoolean && cycles < timeoutCycles) {
+      clockDomain.waitSampling()
+      cycles += 1
+    }
+    assert(
+      bus.r.valid.toBoolean,
+      f"AXI-Lite read address/response path for 0x$address%X timed out after $cycles cycles"
+    )
+
+    val data = bus.r.data.toBigInt
+    val resp = bus.r.resp.toBigInt
+    bus.ar.valid #= false
+    clockDomain.waitSampling()
+    bus.r.ready #= false
+    idleAxiLite(bus)
+    assert(resp == 0, f"AXI-Lite read from 0x$address%X returned error response 0x$resp%X")
+    data
   }
 
-  def readFaultPc(driver: AxiLite4Driver): BigInt = {
-    readRegister(driver, ControlRegisters.FaultPc)
+  def submitKernelCommand(bus: AxiLite4, clockDomain: ClockDomain, command: KernelCorpus.KernelCommand): Unit = {
+    writeRegister(bus, clockDomain, ControlRegisters.EntryPc, BigInt(command.entryPc))
+    writeRegister(bus, clockDomain, ControlRegisters.GridDimX, BigInt(command.gridDimX))
+    writeRegister(bus, clockDomain, ControlRegisters.GridDimY, BigInt(command.gridDimY))
+    writeRegister(bus, clockDomain, ControlRegisters.GridDimZ, BigInt(command.gridDimZ))
+    writeRegister(bus, clockDomain, ControlRegisters.BlockDimX, BigInt(command.blockDimX))
+    writeRegister(bus, clockDomain, ControlRegisters.BlockDimY, BigInt(command.blockDimY))
+    writeRegister(bus, clockDomain, ControlRegisters.BlockDimZ, BigInt(command.blockDimZ))
+    writeRegister(bus, clockDomain, ControlRegisters.ArgBase, BigInt(command.argBase))
+    writeRegister(bus, clockDomain, ControlRegisters.SharedBytes, BigInt(command.sharedBytes))
+    writeRegister(bus, clockDomain, ControlRegisters.Control, BigInt(1))
+  }
+
+  def clearDone(bus: AxiLite4, clockDomain: ClockDomain): Unit = {
+    writeRegister(bus, clockDomain, ControlRegisters.Control, BigInt(2))
+  }
+
+  def readExecutionStatus(bus: AxiLite4, clockDomain: ClockDomain): BigInt = {
+    readRegister(bus, clockDomain, ControlRegisters.Status)
+  }
+
+  def readFaultCode(bus: AxiLite4, clockDomain: ClockDomain): BigInt = {
+    readRegister(bus, clockDomain, ControlRegisters.FaultCode)
+  }
+
+  def readFaultPc(bus: AxiLite4, clockDomain: ClockDomain): BigInt = {
+    readRegister(bus, clockDomain, ControlRegisters.FaultPc)
   }
 }

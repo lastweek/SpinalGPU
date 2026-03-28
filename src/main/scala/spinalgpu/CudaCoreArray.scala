@@ -17,7 +17,21 @@ class CudaCoreArray(config: SmConfig) extends Component {
   private val pending = Reg(CudaIssueReq(config))
   private val rspValid = RegInit(False)
   private val rspPayload = Reg(CudaIssueRsp(config))
-  private val latencyCounter = Reg(UInt(log2Up((config.fpFmaLatency max config.fpMulLatency max config.fpAddLatency max config.cudaIntegerLatency) + 1) bits)) init (0)
+  private val latencyCounter = Reg(
+    UInt(
+      log2Up(
+        (
+          config.fpFmaLatency max
+            config.fpMulLatency max
+            config.fpAddLatency max
+            config.cudaIntegerLatency max
+            config.fp16ScalarLatency max
+            config.fp16x2Latency max
+            config.fp8ConvertLatency
+        ) + 1
+      ) bits
+    )
+  ) init (0)
   private val subwarpBase = Reg(UInt(log2Up(config.warpSize + 1) bits)) init (0)
   private val resultBuffer = Vec.fill(config.warpSize)(Reg(Bits(config.dataWidth bits)) init (0))
 
@@ -36,6 +50,15 @@ class CudaCoreArray(config: SmConfig) extends Component {
       }
       is(B(Opcode.FFMA, 8 bits)) {
         latency := config.fpFmaLatency
+      }
+      is(B(Opcode.HADD, 8 bits), B(Opcode.HMUL, 8 bits), B(Opcode.HFMA, 8 bits), B(Opcode.CVTF32F16, 8 bits), B(Opcode.CVTF16F32, 8 bits)) {
+        latency := config.fp16ScalarLatency
+      }
+      is(B(Opcode.HADD2, 8 bits), B(Opcode.HMUL2, 8 bits)) {
+        latency := config.fp16x2Latency
+      }
+      is(B(Opcode.CVTF16X2E4M3X2, 8 bits), B(Opcode.CVTF16X2E5M2X2, 8 bits), B(Opcode.CVTE4M3X2F16X2, 8 bits), B(Opcode.CVTE5M2X2F16X2, 8 bits)) {
+        latency := config.fp8ConvertLatency
       }
     }
     latency
@@ -113,6 +136,39 @@ class CudaCoreArray(config: SmConfig) extends Component {
       }
       is(B(Opcode.SEL, 8 bits)) {
         result := Mux(operandC.orR, operandAUInt, operandBUInt)
+      }
+      is(B(Opcode.HADD, 8 bits)) {
+        result := Fp16Math.add(operandA(15 downto 0), operandB(15 downto 0)).asUInt.resize(config.dataWidth)
+      }
+      is(B(Opcode.HMUL, 8 bits)) {
+        result := Fp16Math.mul(operandA(15 downto 0), operandB(15 downto 0)).asUInt.resize(config.dataWidth)
+      }
+      is(B(Opcode.HFMA, 8 bits)) {
+        result := Fp16Math.fma(operandA(15 downto 0), operandB(15 downto 0), operandC(15 downto 0)).asUInt.resize(config.dataWidth)
+      }
+      is(B(Opcode.HADD2, 8 bits)) {
+        result := Fp16Math.add2(operandA, operandB).asUInt
+      }
+      is(B(Opcode.HMUL2, 8 bits)) {
+        result := Fp16Math.mul2(operandA, operandB).asUInt
+      }
+      is(B(Opcode.CVTF32F16, 8 bits)) {
+        result := Fp16Math.toFp32(operandA(15 downto 0)).asUInt
+      }
+      is(B(Opcode.CVTF16F32, 8 bits)) {
+        result := Fp16Math.fromFp32(operandA).asUInt.resize(config.dataWidth)
+      }
+      is(B(Opcode.CVTF16X2E4M3X2, 8 bits)) {
+        result := Fp8Format.e4m3x2ToF16x2(operandA(15 downto 0)).asUInt.resize(config.dataWidth)
+      }
+      is(B(Opcode.CVTF16X2E5M2X2, 8 bits)) {
+        result := Fp8Format.e5m2x2ToF16x2(operandA(15 downto 0)).asUInt.resize(config.dataWidth)
+      }
+      is(B(Opcode.CVTE4M3X2F16X2, 8 bits)) {
+        result := Fp8Format.f16x2ToE4m3x2SatFinite(operandA).asUInt.resize(config.dataWidth)
+      }
+      is(B(Opcode.CVTE5M2X2F16X2, 8 bits)) {
+        result := Fp8Format.f16x2ToE5m2x2SatFinite(operandA).asUInt.resize(config.dataWidth)
       }
     }
 

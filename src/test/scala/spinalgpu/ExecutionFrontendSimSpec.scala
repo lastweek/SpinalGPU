@@ -4,7 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
-import spinal.lib.bus.amba4.axilite.sim._
+import spinal.lib.bus.amba4.axilite.AxiLite4
 import spinalgpu.toolchain.KernelCorpus
 
 abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
@@ -28,17 +28,17 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
   }
 
   protected def clearDoneAndWaitForGpuTopReady(
-      hostControl: AxiLite4Driver,
+      hostControlBus: AxiLite4,
       dut: GpuTop,
       timeoutCycles: Int
   ): Unit = {
-    ExecutionTestUtils.clearDone(hostControl)
+    ExecutionTestUtils.clearDone(hostControlBus, dut.coreClockDomain)
     waitForGpuTopDoneClear(dut, timeoutCycles, "GpuTop clearDone")
     dut.coreClockDomain.waitSampling(4)
   }
 
   protected def waitForGpuTopCompletionSignal(
-      hostControl: AxiLite4Driver,
+      hostControlBus: AxiLite4,
       dut: GpuTop,
       kernel: KernelCorpus.KernelCase
   ): (Boolean, BigInt, BigInt) = {
@@ -59,28 +59,28 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
         f"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
     )
 
-    val status = ExecutionTestUtils.readExecutionStatus(hostControl)
+    val status = ExecutionTestUtils.readExecutionStatus(hostControlBus, dut.coreClockDomain)
     val fault = ((status >> 2) & 1) == 1
-    val faultCode = ExecutionTestUtils.readFaultCode(hostControl)
-    val faultPc = ExecutionTestUtils.readFaultPc(hostControl)
+    val faultCode = ExecutionTestUtils.readFaultCode(hostControlBus, dut.coreClockDomain)
+    val faultPc = ExecutionTestUtils.readFaultPc(hostControlBus, dut.coreClockDomain)
     (fault, faultCode, faultPc)
   }
 
   protected def runGpuTopKernelCaseWithoutHarnessGate(kernel: KernelCorpus.KernelCase): Unit = {
     SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
+      ExecutionTestUtils.idleAxiLite(dut.io.hostControl)
       dut.coreClockDomain.assertReset()
       dut.coreClockDomain.waitSampling()
       dut.coreClockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.coreClockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
-      val hostControl = AxiLite4Driver(dut.io.hostControl, dut.coreClockDomain)
       memory.start()
-      hostControl.reset()
+      ExecutionTestUtils.initializeAxiLiteMaster(dut.io.hostControl, dut.coreClockDomain)
 
       KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
-      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
-      val (fault, faultCode, faultPc) = waitForGpuTopCompletionSignal(hostControl, dut, kernel)
+      ExecutionTestUtils.submitKernelCommand(dut.io.hostControl, dut.coreClockDomain, kernel.command)
+      val (fault, faultCode, faultPc) = waitForGpuTopCompletionSignal(dut.io.hostControl, dut, kernel)
       dut.coreClockDomain.waitSampling(8)
 
       withClue(f"faultCode=0x${faultCode.toString(16)} faultPc=0x${faultPc.toString(16)} ") {
@@ -122,6 +122,30 @@ class MatrixMulF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   }
 }
 
+class MatrixAddF16GpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  test("matrix_add_f16 executes through GpuTop") {
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixAddF16, config)
+  }
+}
+
+class MatrixMulF16AccumF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  test("matrix_mul_f16_accum_f32 executes through GpuTop") {
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixMulF16AccumF32, config)
+  }
+}
+
+class VectorAddE4m3x2GpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  test("vector_add_e4m3x2 executes through GpuTop") {
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.vectorAddE4m3x2, config)
+  }
+}
+
+class MatrixMulE5m2x2AccumF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  test("matrix_mul_e5m2x2_accum_f32 executes through GpuTop") {
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixMulE5m2x2AccumF32, config)
+  }
+}
+
 class LinearBiasReluF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("linear_bias_relu_f32 executes through GpuTop") {
     runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.linearBiasReluF32)
@@ -134,19 +158,19 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
 
     SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
+      ExecutionTestUtils.idleAxiLite(dut.io.hostControl)
       dut.coreClockDomain.assertReset()
       dut.coreClockDomain.waitSampling()
       dut.coreClockDomain.deassertReset()
 
       val memory = AxiMemorySim(dut.io.memory, dut.coreClockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
-      val hostControl = AxiLite4Driver(dut.io.hostControl, dut.coreClockDomain)
       memory.start()
-      hostControl.reset()
+      ExecutionTestUtils.initializeAxiLiteMaster(dut.io.hostControl, dut.coreClockDomain)
 
       KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
 
-      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
-      val (firstFault, firstFaultCode, firstFaultPc) = waitForGpuTopCompletionSignal(hostControl, dut, kernel)
+      ExecutionTestUtils.submitKernelCommand(dut.io.hostControl, dut.coreClockDomain, kernel.command)
+      val (firstFault, firstFaultCode, firstFaultPc) = waitForGpuTopCompletionSignal(dut.io.hostControl, dut, kernel)
       dut.coreClockDomain.waitSampling(8)
       withClue(f"faultCode=0x${firstFaultCode.toString(16)} faultPc=0x${firstFaultPc.toString(16)} ") {
         firstFault shouldBe false
@@ -154,10 +178,10 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(0)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
 
-      clearDoneAndWaitForGpuTopReady(hostControl, dut, timeoutCycles = 128)
+      clearDoneAndWaitForGpuTopReady(dut.io.hostControl, dut, timeoutCycles = 128)
 
-      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
-      val (secondFault, secondFaultCode, secondFaultPc) = waitForGpuTopCompletionSignal(hostControl, dut, kernel)
+      ExecutionTestUtils.submitKernelCommand(dut.io.hostControl, dut.coreClockDomain, kernel.command)
+      val (secondFault, secondFaultCode, secondFaultPc) = waitForGpuTopCompletionSignal(dut.io.hostControl, dut, kernel)
       dut.coreClockDomain.waitSampling(8)
       withClue(f"faultCode=0x${secondFaultCode.toString(16)} faultPc=0x${secondFaultPc.toString(16)} ") {
         secondFault shouldBe false

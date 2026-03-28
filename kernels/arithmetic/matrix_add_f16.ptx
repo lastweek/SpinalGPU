@@ -1,0 +1,87 @@
+// Purpose: Add two FP16 row-major matrices using 2D thread coordinates and store an FP16 matrix result.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - One thread computes one output matrix element `C[row, col] = A[row, col] + B[row, col]`.
+// - The kernel reads `%tid.y` as the row index and `%tid.x` as the column index.
+// - Out-of-range threads exit early; in-range threads build row-major addresses, load FP16 values, add them, and store the FP16 result.
+// Where this fits:
+// - This is the low-precision matrix-add analogue of `matrix_add_f32`.
+// - It proves that the 2D matrix execution pattern works with `ld/st.global.f16` and `add.rn.f16`.
+// Key model details:
+// - Inputs and outputs live in global memory as row-major FP16 arrays with 2-byte elements.
+// - `lda`, `ldb`, and `ldc` are row strides measured in FP16 elements, not bytes.
+// - The final linear element index is scaled by 2 to reach the byte address for each half value.
+// CUDA-equivalent sketch (.cu):
+// __global__ void matrix_add_f16(const half* A, const half* B, half* C,
+//                                unsigned rows, unsigned cols,
+//                                unsigned lda, unsigned ldb, unsigned ldc) {
+//   unsigned col = threadIdx.x;
+//   unsigned row = threadIdx.y;
+//   if (row < rows && col < cols) {
+//     C[row * ldc + col] = __hadd(A[row * lda + col], B[row * ldb + col]);
+//   }
+// }
+// SpinalGPU note:
+// - The PTX surface supports 3D block coordinates now, but the teaching launch still uses one CTA and `z = 0`.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry matrix_add_f16(
+    .param .u32 A_ptr,
+    .param .u32 B_ptr,
+    .param .u32 C_ptr,
+    .param .u32 rows,
+    .param .u32 cols,
+    .param .u32 lda,
+    .param .u32 ldb,
+    .param .u32 ldc
+)
+{
+    .reg .u32 %r<20>;
+    .reg .f16 %h<3>;
+    .pred %p<2>;
+
+// Setup
+    ld.param.u32 %r0, [A_ptr];    // Base pointer for matrix A.
+    ld.param.u32 %r1, [B_ptr];    // Base pointer for matrix B.
+    ld.param.u32 %r2, [C_ptr];    // Base pointer for matrix C.
+    ld.param.u32 %r3, [rows];
+    ld.param.u32 %r4, [cols];
+    ld.param.u32 %r5, [lda];
+    ld.param.u32 %r6, [ldb];
+    ld.param.u32 %r7, [ldc];
+    mov.u32 %r8, %tid.x;          // Column coordinate.
+    mov.u32 %r9, %tid.y;          // Row coordinate.
+    setp.lt.u32 %p0, %r9, %r3;    // Guard against threads outside the matrix height.
+    @!%p0 bra done;
+    setp.lt.u32 %p1, %r8, %r4;    // Guard against threads outside the matrix width.
+    @!%p1 bra done;
+
+// Core
+    mul.lo.u32 %r10, %r9, %r5;    // Row-major A row base.
+    add.u32 %r10, %r10, %r8;      // Element index for A[row, col].
+    shl.b32 %r10, %r10, 1;        // FP16 element index -> byte offset.
+    add.u32 %r11, %r0, %r10;
+
+    mul.lo.u32 %r12, %r9, %r6;    // Row-major B row base.
+    add.u32 %r12, %r12, %r8;
+    shl.b32 %r12, %r12, 1;
+    add.u32 %r13, %r1, %r12;
+
+    mul.lo.u32 %r14, %r9, %r7;    // Row-major C row base.
+    add.u32 %r14, %r14, %r8;
+    shl.b32 %r14, %r14, 1;
+    add.u32 %r15, %r2, %r14;
+
+    ld.global.f16 %h0, [%r11];
+    ld.global.f16 %h1, [%r13];
+    add.rn.f16 %h2, %h0, %h1;
+    st.global.f16 [%r15], %h2;
+
+// Exit
+done:
+    ret;
+}

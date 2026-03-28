@@ -30,6 +30,7 @@ class ExternalMemoryArbiter(config: SmConfig) extends Component {
   io.memoryReq.payload.warpId := io.fetchReq.payload.warpId
   io.memoryReq.payload.write := False
   io.memoryReq.payload.address := io.fetchReq.payload.address
+  io.memoryReq.payload.accessWidth := MemoryAccessWidthKind.WORD
   io.memoryReq.payload.beatCount := 1
   io.memoryReq.payload.byteMask := B((1 << config.byteMaskWidth) - 1, config.byteMaskWidth bits)
   for (beat <- 0 until config.cudaLaneCount) {
@@ -39,6 +40,7 @@ class ExternalMemoryArbiter(config: SmConfig) extends Component {
     io.memoryReq.payload.warpId := io.lsuReq.payload.warpId
     io.memoryReq.payload.write := io.lsuReq.payload.write
     io.memoryReq.payload.address := io.lsuReq.payload.address
+    io.memoryReq.payload.accessWidth := io.lsuReq.payload.accessWidth
     io.memoryReq.payload.beatCount := io.lsuReq.payload.beatCount
     io.memoryReq.payload.writeData := io.lsuReq.payload.writeData
     io.memoryReq.payload.byteMask := io.lsuReq.payload.byteMask

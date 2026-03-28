@@ -41,8 +41,8 @@ This repository models one educational SpinalGPU SM with a GH100-style partition
 - The host writes the kernel image and data buffers before launch.
 - AXI-Lite MMIO provides launch metadata:
   - `ENTRY_PC`
-  - `GRID_DIM_X`
-  - `BLOCK_DIM_X`
+  - `GRID_DIM_{X,Y,Z}`
+  - `BLOCK_DIM_{X,Y,Z}`
   - `ARG_BASE`
   - `SHARED_BYTES`
 - `SmAdmissionController` validates the launch, clears shared memory, and initializes warp contexts.
@@ -62,12 +62,12 @@ This repository models one educational SpinalGPU SM with a GH100-style partition
 | `SpecialRegisterReadUnit` | Synthesizes `%tid`, `%ntid`, `%gridid`, and similar reads | Dedicated special-register datapath inside each partition |
 | `L0InstructionCache` | Placeholder local instruction-cache stage | Pass-through structural cache level |
 | `L1InstructionCache` | Shared instruction-side arbitration point | One outstanding fetch at a time |
-| `CudaCoreArray` | Local CUDA arithmetic path inside each partition | Full-warp issue path at the partition boundary |
-| `LoadStoreUnit` | Local LSU inside each partition | Shared-memory or global-memory routing |
+| `CudaCoreArray` | Local CUDA arithmetic path inside each partition | Scalar FP32, scalar/packed FP16, packed FP8 conversion, integer ALU, and compare/select issue path |
+| `LoadStoreUnit` | Local LSU inside each partition | Shared-memory routing plus 16-bit and 32-bit global-memory traffic |
 | `SpecialFunctionUnit` | Local SFU inside each partition | Placeholder vector unary transform |
 | `TensorCoreBlock` | Local tensor path inside each partition | Placeholder vector multiply-style response |
 | `L1DataSharedMemory` | Shared data/shared-memory fabric across sub-SMs | Arbitrates local LSU traffic |
-| `SharedMemory` | SM-local shared memory backing store | Single-port word-addressed memory with clear support |
+| `SharedMemory` | SM-local shared memory backing store | Single-port word-addressed memory with clear support; the public PTX surface is still 32-bit only here |
 | `ExternalMemoryArbiter` | Shares the external memory path between instruction and data fabrics | One fetch side plus one LSU side |
 | `ExternalMemoryAxiAdapter` | Bridges internal burst req/rsp to AXI4 | Single-outstanding AXI read/write adapter |
 
@@ -111,8 +111,9 @@ This repository models one educational SpinalGPU SM with a GH100-style partition
   - PTX subset source compiled ahead of time
   - fixed 32-bit machine instruction words
   - PTX-visible special registers such as `%tid.x`
-  - integer and FP32 CUDA-core ops
-  - shared/global load/store plus `.param` lowering
+  - integer, FP32, FP16, packed FP16x2, and packed FP8 conversion CUDA-core ops
+  - 16-bit and 32-bit global load/store plus `.param` lowering
+  - 32-bit shared-memory load/store
   - uniform branch, exit, and trap
 
 ## PTX Corpus Structure

@@ -29,6 +29,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   pending.warpId.init(0)
   pending.write.init(False)
   pending.address.init(0)
+  pending.accessWidth.init(MemoryAccessWidthKind.WORD)
   pending.beatCount.init(0)
   pending.byteMask.init(0)
   for (beat <- 0 until config.cudaLaneCount) {
@@ -43,6 +44,30 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
     rspPayload.readData(beat).init(0)
   }
 
+  private val accessByteCount = UInt(config.addressWidth bits)
+  accessByteCount := U(config.byteCount, config.addressWidth bits)
+  when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+    accessByteCount := U(2, config.addressWidth bits)
+  }
+
+  private val beatCountMinusOne = UInt(config.globalBurstBeatCountWidth bits)
+  beatCountMinusOne := pending.beatCount - U(1, pending.beatCount.getWidth bits)
+
+  private val writeBeatAddress = UInt(config.addressWidth bits)
+  writeBeatAddress := (pending.address + (writeBeatIndex.resize(config.addressWidth bits) * accessByteCount).resize(config.addressWidth bits)).resize(config.addressWidth bits)
+
+  private val writeShiftBytes = UInt(log2Up(config.byteCount) bits)
+  writeShiftBytes := writeBeatAddress(log2Up(config.byteCount) - 1 downto 0).resized
+
+  private val writeDataAligned = Bits(config.dataWidth bits)
+  private val writeStrbAligned = Bits(config.byteMaskWidth bits)
+  writeDataAligned := pending.writeData(writeBeatIndex.resize(beatIndexWidth bits))
+  writeStrbAligned := pending.byteMask
+  when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+    writeDataAligned := (pending.writeData(writeBeatIndex.resize(beatIndexWidth bits)).asUInt |<< (writeShiftBytes.resize(log2Up(config.dataWidth) bits) * U(8))).asBits
+    writeStrbAligned := (pending.byteMask.asUInt |<< writeShiftBytes).asBits.resized
+  }
+
   io.request.ready := state === AdapterState.IDLE && !rspValid
 
   io.response.valid := rspValid
@@ -50,21 +75,27 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
 
   io.axi.aw.valid := False
   io.axi.aw.addr := pending.address
-  io.axi.aw.len := (pending.beatCount - 1).resized
-  io.axi.aw.setFullSize()
+  io.axi.aw.len := beatCountMinusOne.resized
+  io.axi.aw.size := U(log2Up(config.byteCount), io.axi.aw.size.getWidth bits)
+  when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+    io.axi.aw.size := U(1, io.axi.aw.size.getWidth bits)
+  }
   io.axi.aw.setBurstINCR()
 
   io.axi.w.valid := False
-  io.axi.w.data := pending.writeData(writeBeatIndex.resize(beatIndexWidth bits))
-  io.axi.w.strb := pending.byteMask
-  io.axi.w.last := writeBeatIndex === pending.beatCount - 1
+  io.axi.w.data := writeDataAligned
+  io.axi.w.strb := writeStrbAligned
+  io.axi.w.last := writeBeatIndex === beatCountMinusOne
 
   io.axi.b.ready := False
 
   io.axi.ar.valid := False
   io.axi.ar.addr := pending.address
-  io.axi.ar.len := (pending.beatCount - 1).resized
-  io.axi.ar.setFullSize()
+  io.axi.ar.len := beatCountMinusOne.resized
+  io.axi.ar.size := U(log2Up(config.byteCount), io.axi.ar.size.getWidth bits)
+  when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+    io.axi.ar.size := U(1, io.axi.ar.size.getWidth bits)
+  }
   io.axi.ar.setBurstINCR()
 
   io.axi.r.ready := False
@@ -108,7 +139,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
         writeBeatIndex := writeBeatIndex + 1
       }
 
-      when((writeAddressSent || io.axi.aw.fire) && (writeBeatIndex === pending.beatCount || (io.axi.w.fire && writeBeatIndex === pending.beatCount - 1))) {
+      when((writeAddressSent || io.axi.aw.fire) && (writeBeatIndex === pending.beatCount || (io.axi.w.fire && writeBeatIndex === beatCountMinusOne))) {
         state := AdapterState.WRITE_RSP
       }
     }

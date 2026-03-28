@@ -92,6 +92,7 @@ class SubSmPartition(config: SmConfig) extends Component {
   pendingOp.decoded.immediate.init(0)
   pendingOp.decoded.specialRegister.init(0)
   pendingOp.decoded.addressSpace.init(AddressSpaceKind.GLOBAL)
+  pendingOp.decoded.memoryAccessWidth.init(MemoryAccessWidthKind.WORD)
   pendingOp.decoded.writesRd.init(False)
   pendingOp.decoded.usesRs0.init(False)
   pendingOp.decoded.usesRs1.init(False)
@@ -140,6 +141,7 @@ class SubSmPartition(config: SmConfig) extends Component {
     pendingOp.decoded.immediate := S(0, config.dataWidth bits)
     pendingOp.decoded.specialRegister := U(0, config.specialRegisterWidth bits)
     pendingOp.decoded.addressSpace := AddressSpaceKind.GLOBAL
+    pendingOp.decoded.memoryAccessWidth := MemoryAccessWidthKind.WORD
     pendingOp.decoded.writesRd := False
     pendingOp.decoded.usesRs0 := False
     pendingOp.decoded.usesRs1 := False
@@ -427,9 +429,13 @@ class SubSmPartition(config: SmConfig) extends Component {
   loadStoreUnit.io.issue.valid := False
   loadStoreUnit.io.issue.payload.warpId := selectedWarpIdReg
   loadStoreUnit.io.issue.payload.addressSpace := decodeUnit.io.decoded.addressSpace
+  loadStoreUnit.io.issue.payload.accessWidth := decodeUnit.io.decoded.memoryAccessWidth
   loadStoreUnit.io.issue.payload.write := decodeUnit.io.decoded.isStore
   loadStoreUnit.io.issue.payload.activeMask := selectedContextReg.activeMask
-  loadStoreUnit.io.issue.payload.byteMask := B((1 << config.byteMaskWidth) - 1, config.byteMaskWidth bits)
+  loadStoreUnit.io.issue.payload.byteMask := B(0xF, config.byteMaskWidth bits)
+  when(decodeUnit.io.decoded.memoryAccessWidth === MemoryAccessWidthKind.HALFWORD) {
+    loadStoreUnit.io.issue.payload.byteMask := B(0x3, config.byteMaskWidth bits)
+  }
   for (lane <- 0 until config.warpSize) {
     loadStoreUnit.io.issue.payload.addresses(lane) := (registerFile.io.readDataA(lane) + immediateUInt.resized).resized
     loadStoreUnit.io.issue.payload.writeData(lane) := registerFile.io.readDataB(lane).asBits

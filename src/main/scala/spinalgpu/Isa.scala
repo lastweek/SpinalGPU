@@ -32,11 +32,24 @@ object Opcode {
   val FNEG = 0x26
   val FSETEQ = 0x27
   val FSETLT = 0x28
+  val LDG16 = 0x29
+  val STG16 = 0x2A
+  val HADD = 0x2B
+  val HMUL = 0x2C
+  val HFMA = 0x2D
+  val HADD2 = 0x2E
+  val HMUL2 = 0x2F
   val BRA = 0x30
   val BRZ = 0x31
   val BRNZ = 0x32
   val EXIT = 0x33
   val TRAP = 0x34
+  val CVTF32F16 = 0x35
+  val CVTF16F32 = 0x36
+  val CVTF16X2E4M3X2 = 0x37
+  val CVTF16X2E5M2X2 = 0x38
+  val CVTE4M3X2F16X2 = 0x39
+  val CVTE5M2X2F16X2 = 0x3A
 
   val sfuBase = 0x40
   val sfuLast = 0x4F
@@ -73,11 +86,24 @@ object Opcode {
     FNEG -> "fneg",
     FSETEQ -> "fseteq",
     FSETLT -> "fsetlt",
+    LDG16 -> "ldg16",
+    STG16 -> "stg16",
+    HADD -> "hadd",
+    HMUL -> "hmul",
+    HFMA -> "hfma",
+    HADD2 -> "hadd2",
+    HMUL2 -> "hmul2",
     BRA -> "bra",
     BRZ -> "brz",
     BRNZ -> "brnz",
     EXIT -> "exit",
-    TRAP -> "trap"
+    TRAP -> "trap",
+    CVTF32F16 -> "cvtf32f16",
+    CVTF16F32 -> "cvtf16f32",
+    CVTF16X2E4M3X2 -> "cvtf16x2e4m3x2",
+    CVTF16X2E5M2X2 -> "cvtf16x2e5m2x2",
+    CVTE4M3X2F16X2 -> "cvte4m3x2f16x2",
+    CVTE5M2X2F16X2 -> "cvte5m2x2f16x2"
   )
 
   val byName: Map[String, Int] = names.map(_.swap)
@@ -281,10 +307,12 @@ object Isa {
         case Opcode.NOP | Opcode.EXIT | Opcode.TRAP => InstructionFormat.Br
         case Opcode.MOV | Opcode.ADD | Opcode.SUB | Opcode.MULLO | Opcode.AND | Opcode.OR | Opcode.XOR | Opcode.SHL |
             Opcode.SHR | Opcode.SETEQ | Opcode.SETLT | Opcode.FADD | Opcode.FMUL | Opcode.SETLTS | Opcode.FSUB |
-            Opcode.FABS | Opcode.FNEG | Opcode.FSETEQ | Opcode.FSETLT => InstructionFormat.Rrr
-        case Opcode.FFMA | Opcode.SEL => InstructionFormat.Rrrr
+            Opcode.FABS | Opcode.FNEG | Opcode.FSETEQ | Opcode.FSETLT | Opcode.HADD | Opcode.HMUL | Opcode.HADD2 |
+            Opcode.HMUL2 | Opcode.CVTF32F16 | Opcode.CVTF16F32 | Opcode.CVTF16X2E4M3X2 | Opcode.CVTF16X2E5M2X2 |
+            Opcode.CVTE4M3X2F16X2 | Opcode.CVTE5M2X2F16X2 => InstructionFormat.Rrr
+        case Opcode.FFMA | Opcode.SEL | Opcode.HFMA => InstructionFormat.Rrrr
         case Opcode.MOVI | Opcode.ADDI => InstructionFormat.Rri
-        case Opcode.LDG | Opcode.STG | Opcode.LDS | Opcode.STS => InstructionFormat.Mem
+        case Opcode.LDG | Opcode.STG | Opcode.LDS | Opcode.STS | Opcode.LDG16 | Opcode.STG16 => InstructionFormat.Mem
         case Opcode.BRA | Opcode.BRZ | Opcode.BRNZ => InstructionFormat.Br
         case Opcode.S2R => InstructionFormat.Sys
         case _ => throw new IllegalArgumentException(f"unknown opcode 0x$opcode%02X")
@@ -304,7 +332,7 @@ object Isa {
         s"$mnemonic r${decoded.reg}, r${decoded.rs0}, r${decoded.rs1}, r${decoded.rs2}"
       case InstructionFormat.Rri =>
         s"$mnemonic r${decoded.reg}, r${decoded.rs0}, ${decoded.immediate}"
-      case InstructionFormat.Mem if decoded.opcode == Opcode.LDG || decoded.opcode == Opcode.LDS =>
+      case InstructionFormat.Mem if decoded.opcode == Opcode.LDG || decoded.opcode == Opcode.LDS || decoded.opcode == Opcode.LDG16 =>
         s"$mnemonic r${decoded.reg}, [r${decoded.rs0} + ${decoded.immediate}]"
       case InstructionFormat.Mem =>
         s"$mnemonic [r${decoded.rs0} + ${decoded.immediate}], r${decoded.reg}"

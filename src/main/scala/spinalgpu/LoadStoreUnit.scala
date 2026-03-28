@@ -31,6 +31,7 @@ class LoadStoreUnit(config: SmConfig) extends Component {
 
   pending.warpId.init(0)
   pending.addressSpace.init(AddressSpaceKind.GLOBAL)
+  pending.accessWidth.init(MemoryAccessWidthKind.WORD)
   pending.write.init(False)
   pending.activeMask.init(0)
   pending.byteMask.init(0)
@@ -74,6 +75,11 @@ class LoadStoreUnit(config: SmConfig) extends Component {
 
   private val currentAddress = pending.addresses(laneIndex)
   private val currentWordAddress = currentAddress(config.sharedAddressWidth + 1 downto 2)
+  private val currentAccessBytes = UInt(config.addressWidth bits)
+  currentAccessBytes := U(config.byteCount, config.addressWidth bits)
+  when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+    currentAccessBytes := U(2, config.addressWidth bits)
+  }
 
   private val groupBeatCount = UInt(config.globalBurstBeatCountWidth bits)
   private val groupNextLane = UInt(log2Up(config.warpSize) bits)
@@ -99,7 +105,7 @@ class LoadStoreUnit(config: SmConfig) extends Component {
       prefixAccepted &&
       candidateInRange &&
         pending.activeMask(candidateLane) &&
-        pending.addresses(candidateLane) === (currentAddress + U(offset * config.byteCount, config.addressWidth bits))
+        pending.addresses(candidateLane) === (currentAddress + (U(offset, config.addressWidth bits) * currentAccessBytes))
     when(candidateAccepted) {
       groupLaneIndices(offset) := candidateLane
       groupBeatCount := U(offset + 1, config.globalBurstBeatCountWidth bits)
@@ -131,6 +137,7 @@ class LoadStoreUnit(config: SmConfig) extends Component {
   io.externalMemReq.payload.warpId := pending.warpId
   io.externalMemReq.payload.write := pending.write
   io.externalMemReq.payload.address := groupBaseAddress
+  io.externalMemReq.payload.accessWidth := pending.accessWidth
   io.externalMemReq.payload.beatCount := groupBeatCount
   io.externalMemReq.payload.byteMask := pending.byteMask
   for (beat <- 0 until config.cudaLaneCount) {
@@ -170,7 +177,7 @@ class LoadStoreUnit(config: SmConfig) extends Component {
   }
 
   when(state === State.ISSUE_SHARED) {
-    when(currentAddress(1 downto 0) =/= 0) {
+    when(pending.accessWidth =/= MemoryAccessWidthKind.WORD || currentAddress(1 downto 0) =/= 0) {
       rspPayload.warpId := pending.warpId
       rspPayload.completed := True
       rspPayload.error := True
@@ -229,7 +236,13 @@ class LoadStoreUnit(config: SmConfig) extends Component {
   }
 
   when(state === State.ISSUE_GLOBAL) {
-    when(groupBaseAddress(1 downto 0) =/= 0) {
+    val misalignedGlobal = Bool()
+    misalignedGlobal := groupBaseAddress(1 downto 0) =/= 0
+    when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+      misalignedGlobal := groupBaseAddress(0)
+    }
+
+    when(misalignedGlobal) {
       rspPayload.warpId := pending.warpId
       rspPayload.completed := True
       rspPayload.error := True
@@ -261,7 +274,18 @@ class LoadStoreUnit(config: SmConfig) extends Component {
       when(!pending.write) {
         for (beat <- 0 until config.cudaLaneCount) {
           when(U(beat, config.globalBurstBeatCountWidth bits) < currentGroupBeatCount) {
-            readBuffer(currentGroupLaneIndices(beat)) := io.externalMemRsp.payload.readData(beat)
+            val laneAddress = pending.addresses(currentGroupLaneIndices(beat))
+            val extractedRead = Bits(config.dataWidth bits)
+            extractedRead := io.externalMemRsp.payload.readData(beat)
+            when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+              extractedRead := B(0, config.dataWidth bits)
+              when(laneAddress(1)) {
+                extractedRead(15 downto 0) := io.externalMemRsp.payload.readData(beat)(31 downto 16)
+              } otherwise {
+                extractedRead(15 downto 0) := io.externalMemRsp.payload.readData(beat)(15 downto 0)
+              }
+            }
+            readBuffer(currentGroupLaneIndices(beat)) := extractedRead
           }
         }
       }
@@ -292,7 +316,17 @@ class LoadStoreUnit(config: SmConfig) extends Component {
         when(!pending.write) {
           for (beat <- 0 until config.cudaLaneCount) {
             when(U(beat, config.globalBurstBeatCountWidth bits) < currentGroupBeatCount) {
-              rspPayload.readData(currentGroupLaneIndices(beat)) := io.externalMemRsp.payload.readData(beat)
+              val laneAddress = pending.addresses(currentGroupLaneIndices(beat))
+              when(pending.accessWidth === MemoryAccessWidthKind.HALFWORD) {
+                rspPayload.readData(currentGroupLaneIndices(beat)) := B(0, config.dataWidth bits)
+                when(laneAddress(1)) {
+                  rspPayload.readData(currentGroupLaneIndices(beat))(15 downto 0) := io.externalMemRsp.payload.readData(beat)(31 downto 16)
+                } otherwise {
+                  rspPayload.readData(currentGroupLaneIndices(beat))(15 downto 0) := io.externalMemRsp.payload.readData(beat)(15 downto 0)
+                }
+              } otherwise {
+                rspPayload.readData(currentGroupLaneIndices(beat)) := io.externalMemRsp.payload.readData(beat)
+              }
             }
           }
         }

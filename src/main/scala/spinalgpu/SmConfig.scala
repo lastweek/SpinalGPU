@@ -13,6 +13,9 @@ case class SmConfig(
     fpAddLatency: Int = 4,
     fpMulLatency: Int = 4,
     fpFmaLatency: Int = 5,
+    fp16ScalarLatency: Int = 4,
+    fp16x2Latency: Int = 4,
+    fp8ConvertLatency: Int = 4,
     lsuCount: Int = 1,
     sfuCount: Int = 1,
     tensorCoreCount: Int = 1,
@@ -33,6 +36,9 @@ case class SmConfig(
   require(fpAddLatency > 0, "fpAddLatency must be positive")
   require(fpMulLatency > 0, "fpMulLatency must be positive")
   require(fpFmaLatency > 0, "fpFmaLatency must be positive")
+  require(fp16ScalarLatency > 0, "fp16ScalarLatency must be positive")
+  require(fp16x2Latency > 0, "fp16x2Latency must be positive")
+  require(fp8ConvertLatency > 0, "fp8ConvertLatency must be positive")
   require(lsuCount > 0, "lsuCount must be positive")
   require(sfuCount > 0, "sfuCount must be positive")
   require(tensorCoreCount > 0, "tensorCoreCount must be positive")

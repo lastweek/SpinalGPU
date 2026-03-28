@@ -156,6 +156,7 @@ class L1DataSharedMemory(config: SmConfig) extends Component {
     io.memoryReq.payload.warpId := U(0, config.warpIdWidth bits)
     io.memoryReq.payload.write := False
     io.memoryReq.payload.address := U(0, config.addressWidth bits)
+    io.memoryReq.payload.accessWidth := MemoryAccessWidthKind.WORD
     io.memoryReq.payload.beatCount := U(0, config.globalBurstBeatCountWidth bits)
     io.memoryReq.payload.byteMask := B(0, config.byteMaskWidth bits)
     for (beat <- 0 until config.cudaLaneCount) {
@@ -167,6 +168,7 @@ class L1DataSharedMemory(config: SmConfig) extends Component {
         io.memoryReq.payload.warpId := io.externalReq(subSm).payload.warpId
         io.memoryReq.payload.write := io.externalReq(subSm).payload.write
         io.memoryReq.payload.address := io.externalReq(subSm).payload.address
+        io.memoryReq.payload.accessWidth := io.externalReq(subSm).payload.accessWidth
         io.memoryReq.payload.beatCount := io.externalReq(subSm).payload.beatCount
         io.memoryReq.payload.byteMask := io.externalReq(subSm).payload.byteMask
         for (beat <- 0 until config.cudaLaneCount) {
