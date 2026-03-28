@@ -39,6 +39,27 @@ class MatrixAddF32StreamingMultiprocessorSpec
 class MatrixMulF32StreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulF32)
 
+class ReluClampF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.reluClampF32)
+
+class LinearBiasReluF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.linearBiasReluF32)
+
+class HingeStepF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.hingeStepF32)
+
+class BitopsPackU32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.bitopsPackU32)
+
+class ScalarUnaryF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarUnaryF32)
+
+class ScalarMinS32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarMinS32)
+
+class ScalarMadU32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarMadU32)
+
 class RegisterStressStreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.registerStress)
 

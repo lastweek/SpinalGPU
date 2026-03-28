@@ -1,0 +1,62 @@
+// Purpose: Compute the signed minimum of two 32-bit scalar inputs per thread.
+// Primary feature: arithmetic
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread owns one pair of 32-bit scalar inputs.
+// - The kernel loads one word from each input vector, computes the signed minimum,
+// - and stores the selected scalar to the output vector.
+//
+// Where this fits:
+// - This is the simplest execution-backed teaching kernel for signed compare/select behavior.
+// - It exercises the frontend lowering for `min.s32` without adding extra address or loop complexity.
+//
+// Key model details:
+// - The corpus launches exactly 8 threads, so `%tid.x` maps directly onto the vector element index.
+// - Inputs are loaded as raw 32-bit words; the `.s32` interpretation matters only for the compare semantics.
+// - The output is stored as the same 32-bit bit pattern selected by the signed minimum.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void scalar_min_s32(const int* a, const int* b, int* out) {
+//   unsigned idx = threadIdx.x;
+//   out[idx] = min(a[idx], b[idx]);
+// }
+//
+// SpinalGPU note:
+// - The PTX still uses `%r<N>` registers for signed integers; signedness is carried by the opcode suffix.
+// - This kernel is intentionally tiny so signed compare lowering is easy to inspect in isolation.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry scalar_min_s32(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<8>;
+
+    // Setup
+    // Load the three vector base pointers and use %tid.x as the scalar element index.
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [out_ptr];
+    mov.u32 %r3, %tid.x;
+
+    // Core
+    // Convert the scalar index into a byte offset and form the three global addresses.
+    shl.b32 %r4, %r3, 2;
+    add.u32 %r5, %r0, %r4;
+    add.u32 %r6, %r1, %r4;
+    add.u32 %r7, %r2, %r4;
+
+    // Load the two signed inputs, compute min.s32, and store the selected word.
+    ld.global.u32 %r4, [%r5];
+    ld.global.u32 %r5, [%r6];
+    min.s32 %r6, %r4, %r5;
+    st.global.u32 [%r7], %r6;
+
+    // Exit
+    ret;
+}

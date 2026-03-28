@@ -31,10 +31,14 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `PA5` | `PtxAssemblerSpec`: kernel corpus builder emits raw little-endian binaries from PTX sources |
 | `PA6` | `PtxAssemblerSpec`: lowers extended special-register reads plus narrow `%gridid` `.u64` materialization/store |
 | `PA7` | `PtxAssemblerSpec`: allocates `%f` registers from the shared physical pool and lowers FP32 instructions plus 2D/3D coordinate guards |
+| `PA8` | `PtxAssemblerSpec`: lowers scalar integer bitwise ops, signed compare, and `selp.u32` |
+| `PA9` | `PtxAssemblerSpec`: lowers scalar FP compare/select and unary FP ops |
+| `PA10` | `PtxAssemblerSpec`: lowers `min/max` convenience ops and `mad.lo.u32` |
 | `KM1` | `KernelCorpusSpec`: kernel corpus references every `.ptx` file exactly once and generated binaries exist |
 | `KM2` | `KernelCorpusSpec`: kernel corpus metadata is complete and expectation types match teaching levels |
 | `KM3` | `KernelCorpusSpec`: PTX headers match declarative metadata and follow the teaching template |
 | `CU1` | `CudaCoreArraySpec`: integer subwarp slicing plus FP32 `fadd`/`ffma` return exact lane results |
+| `CU2` | `CudaCoreArraySpec`: signed compare, branchless select, and scalar FP unary/compare ops return exact lane results |
 | `LSU1` | `LoadStoreUnitSpec`: contiguous global accesses coalesce into bursts and sparse accesses split correctly |
 | `AXI1` | `ExternalMemoryAxiAdapterSpec`: burst reads and writes drive AXI multi-beat traffic correctly |
 | `SM1` | `StreamingMultiprocessorSimSpec`: SM admission controller initializes warp contexts and schedules multiple warps |
@@ -52,10 +56,15 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `SM13` | `StreamingMultiprocessorSimSpec`: `grid_id_store` completes and writes the initial `%gridid` value |
 | `SM14` | `StreamingMultiprocessorSimSpec`: `matrix_add_f32` completes and writes expected FP32 matrix sums |
 | `SM15` | `StreamingMultiprocessorSimSpec`: `matrix_mul_f32` completes and writes expected FP32 matrix products |
+| `SM16` | `StreamingMultiprocessorKernelCorpusSpec`: `relu_clamp_f32` completes and writes expected branchless activation outputs |
+| `SM17` | `StreamingMultiprocessorKernelCorpusSpec`: `linear_bias_relu_f32` completes and writes expected dense-layer outputs |
+| `SM18` | `StreamingMultiprocessorKernelCorpusSpec`: `hinge_step_f32` completes and writes expected hinge-loss terms |
+| `SM19` | `StreamingMultiprocessorKernelCorpusSpec`: `bitops_pack_u32` completes and writes expected bit-manipulation results |
 | `GT1` | `GpuTopSimSpec`: `GpuTop` exposes idle AXI memory and AXI-Lite control boundaries |
 | `GT2` | `ExecutionFrontendSimSpec`: `grid_id_store` increments across successive `GpuTop` launches |
 | `GT3` | `ExecutionFrontendSimSpec`: `matrix_add_f32` executes through `GpuTop` and writes expected FP32 output |
 | `GT4` | `ExecutionFrontendSimSpec`: `matrix_mul_f32` executes through `GpuTop` and writes expected FP32 output |
+| `GT5` | `ExecutionFrontendSimSpec`: `linear_bias_relu_f32` executes through `GpuTop` and writes expected dense-layer output |
 
 ## Compatibility Summary
 
@@ -100,10 +109,10 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `.reg .f32` | PTX virtual registers for FP32 scalar values | `Implemented` | `Direct` | `PA7`, `SM14`, `SM15`, `GT3`, `GT4` | `.reg .f32 %f<N>;` declarations are accepted and allocate from the same physical 32-bit register file as `%r<N>`. |
 | `.reg .u64` | PTX virtual registers for 64-bit scalar values | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `%gridid` materialization and `st.global.u64`; `.u64` arithmetic and loads remain unsupported. |
 | 32-bit scalar integer execution | A backend must provide typed scalar integer execution for the supported subset | `Implemented` | `Direct` | `SM4`, `SM5`, `SM7`, `SM14`, `SM15` | Integer address arithmetic, loop control, predicates, and shared/global indexing execute on the CUDA-core integer path. |
-| 32-bit scalar FP execution | A backend must provide typed FP32 execution for the supported subset | `Implemented` | `Direct` | `CU1`, `SM14`, `SM15`, `GT3`, `GT4` | `add.f32`, `mul.f32`, and `fma.rn.f32` are implemented with IEEE-like round-to-nearest-even semantics on the CUDA-core path. |
+| 32-bit scalar FP execution | A backend must provide typed FP32 execution for the supported subset | `Implemented` | `Direct` | `CU1`, `CU2`, `SM14`, `SM15`, `SM16`, `SM17`, `SM18`, `GT3`, `GT4`, `GT5` | `add.f32`, `mul.f32`, `sub.f32`, `neg.f32`, `abs.f32`, ordered `setp.*.f32`, `selp.f32`, and PTX `fma.rn.f32` are implemented on the CUDA-core path. The current `fma.rn.f32` lowering is a three-source multiply-add, not a single-round fused IEEE FMA. |
 | `.pred` support | PTX uses predicate registers for condition evaluation and branch predication | `Partial` | `Direct` | `PA2`, `SM5`, `SM10` | Predicates lower to compiler-managed integer-backed condition values, not a native PTX-style predicate register file. |
 | Wider and alternate integer widths beyond the narrow `%gridid` path (`.s64`, general `.u64`, `.u16`, `.u8`) | PTX supports multiple integer widths | `Rejected` | `Direct` | `PA4` | General non-`%gridid` wider integer support is still rejected by the frontend. |
-| Floating-point families beyond the narrow FP32 subset (`.f64`, conversions, FP comparisons, vector and packed/tensor formats) | PTX supports broader scalar FP, vector, and packed element types | `Rejected` | `Direct` | `PA4` | Only scalar `.f32` register values and the explicit FP32 instruction subset documented below are accepted in v1. |
+| Floating-point families beyond the narrow FP32 subset (`.f64`, conversions, unordered compares, vector and packed/tensor formats) | PTX supports broader scalar FP, vector, and packed element types | `Rejected` | `Direct` | `PA4` | Only scalar `.f32` register values and the explicit FP32 instruction subset documented below are accepted in v1. |
 
 ## Special Registers
 
@@ -127,13 +136,18 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | `add.u32` | Integer add in the scalar ALU path | `Implemented` | `Direct` | `SM4`, `SM5`, `SM7` | Register and immediate RHS forms are accepted. |
 | `sub.u32` | Integer subtract in the scalar ALU path | `Implemented` | `None` | none | Parsed and lowered to machine `sub`, but no current test exercises it directly. |
 | `mul.lo.u32` | Low 32-bit integer multiply | `Implemented` | `Direct` | `SM15`, `GT4` | Used directly for matrix indexing and loop address arithmetic. |
+| `mad.lo.u32` | Multiply-add convenience form for integer address arithmetic | `Partial` | `Direct` | `PA10` | Lowered in the PTX frontend to `mul.lo.u32` plus `add.u32`; there is no dedicated machine opcode. |
+| `and.b32`, `or.b32`, `xor.b32`, `shr.b32` | Scalar bitwise and logical-right-shift integer ops | `Implemented` | `Direct` | `PA8`, `SM19` | Lower directly to machine `and`, `or`, `xor`, and `shr`. |
 | `add.f32` | FP32 addition on the CUDA-core datapath | `Implemented` | `Direct` | `PA7`, `CU1`, `SM14`, `GT3` | Lowered to machine `fadd`. |
 | `mul.f32` | FP32 multiplication on the CUDA-core datapath | `Implemented` | `Direct` | `PA7`, `SM15`, `GT4` | Lowered to machine `fmul`. |
-| `fma.rn.f32` | FP32 fused multiply-add on the CUDA-core datapath | `Implemented` | `Direct` | `PA7`, `CU1`, `SM15`, `GT4` | Lowered to machine `ffma` with a dedicated three-source encoding. |
+| `sub.f32`, `neg.f32`, `abs.f32` | Scalar FP32 subtract and unary ops | `Implemented` | `Direct` | `PA9`, `CU2`, `SM18` | Lower directly to machine `fsub`, `fneg`, and `fabs`. |
+| `fma.rn.f32` | FP32 three-source multiply-add on the CUDA-core datapath | `Implemented` | `Direct` | `PA7`, `CU1`, `SM15`, `SM17`, `GT4`, `GT5` | Lowered to machine `ffma` with a dedicated three-source encoding. The current repo implementation rounds the multiply and add stages separately rather than providing a single-round fused IEEE FMA. |
+| `min/max.{u32,s32,f32}` | Branchless min/max convenience forms | `Partial` | `Direct` | `PA10`, `SM16`, `SM18` | Lowered in the PTX frontend to compare plus `selp`; there is no dedicated machine min/max opcode. |
 | `shl.b32` | Logical left shift for scalar integer values | `Implemented` | `Direct` | `SM3`, `SM6`, `SM7` | Used in the corpus for 4-byte address scaling. |
-| `setp.eq.u32` | Equality compare producing a predicate value | `Implemented` | `Indirect` | `PA2` | Shares the same lowering path as `setp.ne.u32`, but lacks a dedicated kernel or unit test. |
-| `setp.ne.u32` | Inequality compare producing a predicate value | `Implemented` | `Direct` | `PA2`, `SM5`, `SM10` | Lowered through the same compare path plus optional negate. |
-| `setp.lt.u32` | Unsigned less-than compare producing a predicate value | `Implemented` | `Direct` | `PA7`, `SM14`, `SM15` | Used for row/column bounds checks in the matrix kernels. |
+| `setp.{eq,ne,lt,le,gt,ge}.u32` | Unsigned integer compares producing a predicate value | `Implemented` | `Direct` | `PA2`, `PA7`, `SM5`, `SM10`, `SM14`, `SM15` | `eq`/`lt` lower directly; `ne`/`le`/`gt`/`ge` are derived in the frontend through negate and operand swap over the primitive compare ops. |
+| `setp.{eq,ne,lt,le,gt,ge}.s32` | Signed integer compares producing a predicate value | `Implemented` | `Direct` | `PA8`, `CU2`, `SM19` | Lowered through machine `seteq`, machine `setlts`, plus frontend negate and operand swap. |
+| `setp.{eq,ne,lt,le,gt,ge}.f32` | Ordered FP32 compares producing a predicate value | `Implemented` | `Direct` | `PA9`, `CU2`, `SM16`, `SM17`, `SM18` | Lowered through machine `fseteq` and `fsetlt` plus frontend negate, OR, and operand swap. Unordered compare variants remain rejected. |
+| `selp.u32`, `selp.f32` | Branchless integer and FP32 value selection | `Implemented` | `Direct` | `PA8`, `PA9`, `CU2`, `SM16`, `SM17` | Lowered to machine `sel` and carried on the existing three-source CUDA issue path. |
 | `bra` | Local control-flow branch to a label | `Implemented` | `Indirect` | `PA2` | Branch target resolution is exercised, but there is no dedicated unconditional-branch corpus case. |
 | `@%p bra` | Predicate-true conditional branch | `Implemented` | `Direct` | `PA2`, `SM5`, `SM10` | Works for the current predicate subset and local labels. |
 | `@!%p bra` | Predicate-false conditional branch | `Implemented` | `Indirect` | `PA2` | Shares the predicated-branch lowering path, but no dedicated execution case uses the negated form. |
@@ -160,7 +174,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | --- | --- | --- | --- | --- | --- |
 | `.const` state space | PTX defines constant memory and constant-space loads | `Rejected` | `Direct` | `PA4` | `.const` declarations are rejected by the frontend today. |
 | `.local` state space | PTX defines per-thread local memory and spill-like addressing | `Rejected` | `None` | none | No `.local` declarations, addressing, or lowering path exists. |
-| Floating-point families beyond the narrow FP32 subset | PTX supports FP ALU, comparisons, rounding modes, and conversions beyond `add/mul/fma` | `Rejected` | `Direct` | `PA4` | Only `mov.f32`, `add.f32`, `mul.f32`, `fma.rn.f32`, `ld.global.f32`, and `st.global.f32` are accepted today. |
+| Floating-point families beyond the narrow FP32 subset | PTX supports broader FP ALU, conversions, rounding modes, unordered compares, and richer literal forms | `Rejected` | `Direct` | `PA4` | Today the accepted FP32 surface is `mov.f32`, `add.f32`, `mul.f32`, `sub.f32`, `neg.f32`, `abs.f32`, `fma.rn.f32`, ordered `setp.*.f32`, `selp.f32`, `min/max.f32`, `ld.global.f32`, and `st.global.f32`. |
 | SFU instructions | PTX includes special-function instructions such as reciprocal and transcendental ops | `Rejected` | `None` | none | No PTX SFU mnemonics are accepted yet. |
 | Tensor and MMA instructions | PTX includes tensor fragment, MMA, and tensor-memory instructions | `Rejected` | `None` | none | No PTX tensor surface is exposed yet. |
 | Barriers and synchronization | PTX includes CTA sync, async copy coordination, and barrier objects | `Rejected` | `None` | none | No PTX-visible barrier or synchronization instructions exist in the current frontend/runtime path. |

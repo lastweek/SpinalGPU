@@ -57,13 +57,26 @@ class DecodeUnit(config: SmConfig) extends Component {
     }
     is(B(Opcode.ADD, 8 bits), B(Opcode.SUB, 8 bits), B(Opcode.MULLO, 8 bits), B(Opcode.AND, 8 bits), B(Opcode.OR, 8 bits),
       B(Opcode.XOR, 8 bits), B(Opcode.SHL, 8 bits), B(Opcode.SHR, 8 bits), B(Opcode.SETEQ, 8 bits), B(Opcode.SETLT, 8 bits),
-      B(Opcode.FADD, 8 bits), B(Opcode.FMUL, 8 bits)) {
+      B(Opcode.SETLTS, 8 bits), B(Opcode.FADD, 8 bits), B(Opcode.FMUL, 8 bits), B(Opcode.FSUB, 8 bits),
+      B(Opcode.FSETEQ, 8 bits), B(Opcode.FSETLT, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.CUDA
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True
       io.decoded.usesRs1 := True
     }
+    is(B(Opcode.FNEG, 8 bits), B(Opcode.FABS, 8 bits)) {
+      io.decoded.target := ExecutionUnitKind.CUDA
+      io.decoded.writesRd := True
+      io.decoded.usesRs0 := True
+    }
     is(B(Opcode.FFMA, 8 bits)) {
+      io.decoded.target := ExecutionUnitKind.CUDA
+      io.decoded.writesRd := True
+      io.decoded.usesRs0 := True
+      io.decoded.usesRs1 := True
+      io.decoded.usesRs2 := True
+    }
+    is(B(Opcode.SEL, 8 bits)) {
       io.decoded.target := ExecutionUnitKind.CUDA
       io.decoded.writesRd := True
       io.decoded.usesRs0 := True

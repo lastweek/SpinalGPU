@@ -13,6 +13,69 @@ object Fp32Math {
 
   private def canonicalNaN: Bits = B(0x7FC00000L, 32 bits)
 
+  def abs(value: Bits): Bits = {
+    val result = Bits(32 bits)
+    result := value
+    result(31) := False
+    result
+  }
+
+  def neg(value: Bits): Bits = {
+    val result = Bits(32 bits)
+    result := value
+    result(31) := !value(31)
+    result
+  }
+
+  def eq(a: Bits, b: Bits): Bool = {
+    val exponentA = a(30 downto 23).asUInt
+    val fractionA = a(22 downto 0).asUInt
+    val exponentB = b(30 downto 23).asUInt
+    val fractionB = b(22 downto 0).asUInt
+
+    val isNaNA = exponentA === 255 && fractionA =/= 0
+    val isNaNB = exponentB === 255 && fractionB =/= 0
+    val isZeroA = exponentA === 0 && fractionA === 0
+    val isZeroB = exponentB === 0 && fractionB === 0
+
+    val result = Bool()
+    result := False
+    when(!(isNaNA || isNaNB)) {
+      result := (a === b) || (isZeroA && isZeroB)
+    }
+    result
+  }
+
+  def lt(a: Bits, b: Bits): Bool = {
+    val exponentA = a(30 downto 23).asUInt
+    val fractionA = a(22 downto 0).asUInt
+    val exponentB = b(30 downto 23).asUInt
+    val fractionB = b(22 downto 0).asUInt
+
+    val isNaNA = exponentA === 255 && fractionA =/= 0
+    val isNaNB = exponentB === 255 && fractionB =/= 0
+    val isZeroA = exponentA === 0 && fractionA === 0
+    val isZeroB = exponentB === 0 && fractionB === 0
+    val equal = (a === b) || (isZeroA && isZeroB)
+    val signA = a(31)
+    val signB = b(31)
+    val magnitudeA = a(30 downto 0).asUInt
+    val magnitudeB = b(30 downto 0).asUInt
+
+    val result = Bool()
+    result := False
+    when(!(isNaNA || isNaNB) && !equal) {
+      when(signA =/= signB) {
+        result := signA && !signB
+      } elsewhen (!signA) {
+        result := magnitudeA < magnitudeB
+      } otherwise {
+        result := magnitudeA > magnitudeB
+      }
+    }
+    result
+  }
+
   private def shiftRightJam(value: UInt, shift: UInt): UInt = {
     val width = value.getWidth
     val result = UInt(width bits)
@@ -235,6 +298,8 @@ object Fp32Math {
 
     result
   }
+
+  def sub(a: Bits, b: Bits): Bits = add(a, neg(b))
 
   def mul(a: Bits, b: Bits): Bits = {
     val signA = a(31)

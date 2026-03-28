@@ -1,6 +1,7 @@
 package spinalgpu
 
 import org.scalatest.Assertions._
+import spinal.core.ClockDomain
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
 import spinal.lib.bus.amba4.axilite.sim._
@@ -16,10 +17,17 @@ import spinalgpu.toolchain.KernelCorpus._
 object KernelCorpusTestUtils {
   private final case class FaultObservation(fault: Boolean, code: BigInt, faultPc: BigInt)
 
-  private def waitForGpuTopCompletion(dut: GpuTop, kernel: KernelCase): Unit = {
+  private def waitForGpuTopCompletion(
+      dut: GpuTop,
+      hostControl: AxiLite4Driver,
+      clockDomain: ClockDomain,
+      kernel: KernelCase
+  ): FaultObservation = {
+    // Wait on the live completion signal, then read the latched AXI-Lite status once.
+    // Repeated AXI-Lite polling here made long-running simulations consume excessive memory.
     var cycles = 0
     while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
-      dut.coreClockDomain.waitSampling()
+      clockDomain.waitSampling()
       cycles += 1
     }
 
@@ -30,6 +38,14 @@ object KernelCorpusTestUtils {
         s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
         s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
         f"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
+    )
+
+    val status = ExecutionTestUtils.readExecutionStatus(hostControl)
+    val fault = ((status >> 2) & 1) == 1
+    FaultObservation(
+      fault = fault,
+      code = ExecutionTestUtils.readFaultCode(hostControl),
+      faultPc = ExecutionTestUtils.readFaultPc(hostControl)
     )
   }
 
@@ -164,19 +180,15 @@ object KernelCorpusTestUtils {
       hostControl.reset()
 
       loadKernelCase(memory, kernel, config.byteCount)
-      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
-      waitForGpuTopCompletion(dut, kernel)
+      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
+      val observation = waitForGpuTopCompletion(dut, hostControl, dut.coreClockDomain, kernel)
       dut.coreClockDomain.waitSampling(8)
 
       assertKernelExpectation(
         memory,
         kernel,
         config.byteCount,
-        FaultObservation(
-          fault = dut.io.debugExecutionStatus.fault.toBoolean,
-          code = dut.io.debugExecutionStatus.faultCode.toBigInt,
-          faultPc = dut.io.debugExecutionStatus.faultPc.toBigInt
-        )
+        observation
       )
 
       memory.stop()

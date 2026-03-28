@@ -1,0 +1,70 @@
+// Purpose: Clamp an FP32 vector to [0, clamp_hi] with branchless compare and select.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - One thread owns one FP32 element.
+// - Each thread loads an input value and a per-element clamp limit from global memory.
+// - The kernel first clamps the value down to the upper limit, then clamps it up to zero.
+// - The final result is written back to global memory without any divergent branch.
+// Where this fits:
+// - This is the first direct execution kernel for PTX `setp.f32` plus `selp.f32`.
+// - It shows how branchless scalar control replaces divergent branches in the current repo.
+// - It acts like a small activation or saturation stage in an inference pipeline.
+// Key model details:
+// - Inputs and outputs live in global memory and are addressed as rowless 1D FP32 arrays.
+// - `%tid.x` picks the element index and `shl.b32` scales by 4 bytes per FP32 value.
+// - The current runtime still launches one CTA, so the kernel only needs thread coordinates.
+// CUDA-equivalent sketch (.cu):
+// __global__ void relu_clamp_f32(const float* in, const float* clamp_hi, float* out) {
+//   unsigned idx = threadIdx.x;
+//   float clamped = in[idx] > clamp_hi[idx] ? clamp_hi[idx] : in[idx];
+//   out[idx] = clamped < 0.0f ? 0.0f : clamped;
+// }
+// SpinalGPU note:
+// - The PTX uses explicit `setp` and `selp` because non-uniform branches still fault in this repo.
+// - This kernel stays one-dimensional and one-CTA to match the current execution model.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry relu_clamp_f32(
+    .param .u32 in_ptr,
+    .param .u32 clamp_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<8>;
+    .reg .f32 %f<4>;
+    .pred %p<2>;
+
+    // Setup
+    // Load the three global pointers and form the FP32 byte offset for this lane.
+    ld.param.u32 %r0, [in_ptr];
+    ld.param.u32 %r1, [clamp_ptr];
+    ld.param.u32 %r2, [out_ptr];
+    mov.u32 %r3, %tid.x;
+    shl.b32 %r4, %r3, 2;
+
+    // Core
+    // Load the input value and the per-element clamp limit.
+    add.u32 %r5, %r0, %r4;
+    ld.global.f32 %f0, [%r5];
+    add.u32 %r6, %r1, %r4;
+    ld.global.f32 %f1, [%r6];
+
+    // Clamp to the upper limit first: min(x, clamp_hi).
+    setp.gt.f32 %p0, %f0, %f1;
+    selp.f32 %f2, %f1, %f0, %p0;
+
+    // Then clamp the result up to zero: max(0, clamped).
+    mov.f32 %f3, 0f00000000;
+    setp.lt.f32 %p1, %f2, %f3;
+    selp.f32 %f2, %f3, %f2, %p1;
+
+    // Store the final branchless ReLU-style clamp result.
+    add.u32 %r7, %r2, %r4;
+    st.global.f32 [%r7], %f2;
+
+    // Exit
+    ret;
+}

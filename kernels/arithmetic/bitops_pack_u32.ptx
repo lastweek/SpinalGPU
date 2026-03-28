@@ -1,0 +1,68 @@
+// Purpose: Apply integer bit masks, XOR, and logical right shift to packed 32-bit data.
+// Primary feature: arithmetic
+// Expected outcome: success
+// High-level execution flow:
+// - One thread owns one pair of packed 32-bit words.
+// - It masks the first input, ORs the second input with a small bit pattern, XORs them together,
+// - then shifts the result right to produce a packed output word.
+// - The final transformed word is written to global memory.
+// Where this fits:
+// - This is the scalar integer-completeness kernel for the phase.
+// - It proves the PTX spellings `and.b32`, `or.b32`, `xor.b32`, and `shr.b32`.
+// - It complements the ML-oriented FP32 kernels by covering the normal integer CUDA-core path.
+// Key model details:
+// - The mask constants are intentionally small enough to fit the current PTX immediate path.
+// - The computation is one-dimensional and reduction-free, so it maps directly onto one warp.
+// - `%tid.x` chooses the packed word index and `shl.b32` scales by 4 bytes per word.
+// CUDA-equivalent sketch (.cu):
+// __global__ void bitops_pack_u32(const unsigned* a, const unsigned* b, unsigned* out) {
+//   unsigned idx = threadIdx.x;
+//   unsigned masked = a[idx] & 0x000000FFu;
+//   unsigned merged = b[idx] | 0x00000F0Fu;
+//   out[idx] = (masked ^ merged) >> 4;
+// }
+// SpinalGPU note:
+// - This kernel is not ML-specific; it exists to keep the scalar integer PTX surface from lagging
+//   behind the new FP compare/select work.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry bitops_pack_u32(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<11>;
+
+    // Setup
+    // Load the global pointers and compute the 4-byte element offset for this thread.
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [out_ptr];
+    mov.u32 %r3, %tid.x;
+    shl.b32 %r4, %r3, 2;
+
+    // Core
+    // Load the two packed 32-bit input words.
+    add.u32 %r5, %r0, %r4;
+    ld.global.u32 %r6, [%r5];
+    add.u32 %r5, %r1, %r4;
+    ld.global.u32 %r7, [%r5];
+
+    // Apply the mask/or/xor/shift pipeline on the integer CUDA-core path.
+    mov.u32 %r8, 255;
+    mov.u32 %r9, 3855;
+    and.b32 %r6, %r6, %r8;
+    or.b32 %r7, %r7, %r9;
+    xor.b32 %r10, %r6, %r7;
+    shr.b32 %r10, %r10, 4;
+
+    // Store the transformed packed output word.
+    add.u32 %r5, %r2, %r4;
+    st.global.u32 [%r5], %r10;
+
+    // Exit
+    ret;
+}

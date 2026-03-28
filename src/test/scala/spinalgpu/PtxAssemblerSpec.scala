@@ -166,6 +166,120 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
     )
   }
 
+  test("lowers scalar integer bitwise ops, signed compare, and selp.u32") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry int_scalar()
+        |{
+        |    .reg .u32 %r<5>;
+        |    .pred %p<1>;
+        |
+        |    mov.u32 %r0, 255;
+        |    mov.u32 %r1, 3855;
+        |    and.b32 %r2, %r0, %r1;
+        |    or.b32 %r3, %r2, 7;
+        |    xor.b32 %r4, %r3, %r0;
+        |    shr.b32 %r2, %r4, 4;
+        |    setp.lt.s32 %p0, %r2, %r3;
+        |    selp.u32 %r4, %r2, %r3, %p0;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeRri(Opcode.MOVI, rd = 1, rs0 = 0, immediate = 255),
+      Isa.encodeRri(Opcode.MOVI, rd = 2, rs0 = 0, immediate = 3855),
+      Isa.encodeRrr(Opcode.AND, rd = 3, rs0 = 1, rs1 = 2),
+      Isa.encodeRri(Opcode.MOVI, rd = 7, rs0 = 0, immediate = 7),
+      Isa.encodeRrr(Opcode.OR, rd = 4, rs0 = 3, rs1 = 7),
+      Isa.encodeRrr(Opcode.XOR, rd = 5, rs0 = 4, rs1 = 1),
+      Isa.encodeRri(Opcode.MOVI, rd = 7, rs0 = 0, immediate = 4),
+      Isa.encodeRrr(Opcode.SHR, rd = 3, rs0 = 5, rs1 = 7),
+      Isa.encodeRrr(Opcode.SETLTS, rd = 6, rs0 = 3, rs1 = 4),
+      Isa.encodeRrrr(Opcode.SEL, rd = 5, rs0 = 3, rs1 = 4, rs2 = 6),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("lowers scalar FP compare/select and unary FP ops") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry fp_scalar()
+        |{
+        |    .reg .f32 %f<5>;
+        |    .pred %p<1>;
+        |
+        |    mov.f32 %f0, 0f00000000;
+        |    mov.f32 %f1, %f0;
+        |    neg.f32 %f2, %f1;
+        |    abs.f32 %f3, %f2;
+        |    sub.f32 %f4, %f3, %f0;
+        |    setp.ge.f32 %p0, %f4, %f1;
+        |    selp.f32 %f4, %f3, %f0, %p0;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeRri(Opcode.MOVI, rd = 1, rs0 = 0, immediate = 0),
+      Isa.encodeRrr(Opcode.MOV, rd = 2, rs0 = 1, rs1 = 0),
+      Isa.encodeRrr(Opcode.FNEG, rd = 3, rs0 = 2, rs1 = 0),
+      Isa.encodeRrr(Opcode.FABS, rd = 4, rs0 = 3, rs1 = 0),
+      Isa.encodeRrr(Opcode.FSUB, rd = 5, rs0 = 4, rs1 = 1),
+      Isa.encodeRrr(Opcode.FSETLT, rd = 6, rs0 = 2, rs1 = 5),
+      Isa.encodeRrr(Opcode.FSETEQ, rd = 7, rs0 = 5, rs1 = 2),
+      Isa.encodeRrr(Opcode.OR, rd = 6, rs0 = 6, rs1 = 7),
+      Isa.encodeRrrr(Opcode.SEL, rd = 5, rs0 = 4, rs1 = 1, rs2 = 6),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
+  test("lowers min/max convenience ops and mad.lo.u32 through existing scalar datapaths") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry lowered_helpers()
+        |{
+        |    .reg .u32 %r<4>;
+        |    .reg .f32 %f<3>;
+        |
+        |    mov.u32 %r0, 3;
+        |    mov.u32 %r1, 5;
+        |    mad.lo.u32 %r2, %r0, %r1, %r1;
+        |    min.s32 %r3, %r2, %r1;
+        |    mov.f32 %f0, 0f00000000;
+        |    mov.f32 %f1, %f0;
+        |    max.f32 %f2, %f0, %f1;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeRri(Opcode.MOVI, rd = 1, rs0 = 0, immediate = 3),
+      Isa.encodeRri(Opcode.MOVI, rd = 2, rs0 = 0, immediate = 5),
+      Isa.encodeRrr(Opcode.MULLO, rd = 8, rs0 = 1, rs1 = 2),
+      Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 8, rs1 = 2),
+      Isa.encodeRrr(Opcode.SETLTS, rd = 8, rs0 = 3, rs1 = 2),
+      Isa.encodeRrrr(Opcode.SEL, rd = 4, rs0 = 3, rs1 = 2, rs2 = 8),
+      Isa.encodeRri(Opcode.MOVI, rd = 5, rs0 = 0, immediate = 0),
+      Isa.encodeRrr(Opcode.MOV, rd = 6, rs0 = 5, rs1 = 0),
+      Isa.encodeRrr(Opcode.FSETLT, rd = 8, rs0 = 5, rs1 = 6),
+      Isa.encodeRrrr(Opcode.SEL, rd = 7, rs0 = 6, rs1 = 5, rs2 = 8),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
   test("lowers 2D thread-coordinate guards with setp.lt.u32") {
     val program = PtxAssembler.assemble(
       """.version 8.0
@@ -233,6 +347,24 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
           |.visible .entry bad()
           |{
           |    .const .align 4 .b8 const_data[16];
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f32 %f<2>;
+          |    .pred %p<1>;
+          |
+          |    setp.ltu.f32 %p0, %f0, %f1;
           |    ret;
           |}
           |""".stripMargin

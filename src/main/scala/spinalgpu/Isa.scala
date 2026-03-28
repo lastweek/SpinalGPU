@@ -21,10 +21,17 @@ object Opcode {
   val FADD = 0x1B
   val FMUL = 0x1C
   val FFMA = 0x1D
+  val SETLTS = 0x1E
+  val FSUB = 0x1F
   val LDG = 0x20
   val STG = 0x21
   val LDS = 0x22
   val STS = 0x23
+  val SEL = 0x24
+  val FABS = 0x25
+  val FNEG = 0x26
+  val FSETEQ = 0x27
+  val FSETLT = 0x28
   val BRA = 0x30
   val BRZ = 0x31
   val BRNZ = 0x32
@@ -55,10 +62,17 @@ object Opcode {
     FADD -> "fadd",
     FMUL -> "fmul",
     FFMA -> "ffma",
+    SETLTS -> "setlts",
+    FSUB -> "fsub",
     LDG -> "ldg",
     STG -> "stg",
     LDS -> "lds",
     STS -> "sts",
+    SEL -> "sel",
+    FABS -> "fabs",
+    FNEG -> "fneg",
+    FSETEQ -> "fseteq",
+    FSETLT -> "fsetlt",
     BRA -> "bra",
     BRZ -> "brz",
     BRNZ -> "brnz",
@@ -266,8 +280,9 @@ object Isa {
       opcode match {
         case Opcode.NOP | Opcode.EXIT | Opcode.TRAP => InstructionFormat.Br
         case Opcode.MOV | Opcode.ADD | Opcode.SUB | Opcode.MULLO | Opcode.AND | Opcode.OR | Opcode.XOR | Opcode.SHL |
-            Opcode.SHR | Opcode.SETEQ | Opcode.SETLT | Opcode.FADD | Opcode.FMUL => InstructionFormat.Rrr
-        case Opcode.FFMA => InstructionFormat.Rrrr
+            Opcode.SHR | Opcode.SETEQ | Opcode.SETLT | Opcode.FADD | Opcode.FMUL | Opcode.SETLTS | Opcode.FSUB |
+            Opcode.FABS | Opcode.FNEG | Opcode.FSETEQ | Opcode.FSETLT => InstructionFormat.Rrr
+        case Opcode.FFMA | Opcode.SEL => InstructionFormat.Rrrr
         case Opcode.MOVI | Opcode.ADDI => InstructionFormat.Rri
         case Opcode.LDG | Opcode.STG | Opcode.LDS | Opcode.STS => InstructionFormat.Mem
         case Opcode.BRA | Opcode.BRZ | Opcode.BRNZ => InstructionFormat.Br

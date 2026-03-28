@@ -1,0 +1,111 @@
+// Purpose: Compute a one-CTA dense layer followed by bias add and ReLU.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - One thread computes one output neuron.
+// - The thread walks across the input feature vector, loads one weight and one input element per iteration,
+// - accumulates with `fma.rn.f32`, adds the bias term, and applies ReLU with `setp` plus `selp`.
+// - The final activated output is written to global memory.
+// Where this fits:
+// - This is the main ML-inference kernel for the scalar PTX-completeness phase.
+// - It combines the existing FP32 FMA path with the new compare/select surface.
+// - It models a classic affine layer plus activation without needing barriers or reductions.
+// Key model details:
+// - The weights are row-major: one contiguous row per output neuron.
+// - The input vector and bias vector live in global memory and are reused through scalar loads.
+// - `%tid.x` is the output neuron index because the current runtime still launches one CTA.
+// CUDA-equivalent sketch (.cu):
+// __global__ void linear_bias_relu_f32(
+//     const float* weights, const float* input, const float* bias, float* output,
+//     unsigned input_dim, unsigned output_dim) {
+//   unsigned out_idx = threadIdx.x;
+//   if (out_idx >= output_dim) return;
+//   float acc = 0.0f;
+//   for (unsigned k = 0; k < input_dim; ++k) {
+//     acc = fmaf(weights[out_idx * input_dim + k], input[k], acc);
+//   }
+//   acc += bias[out_idx];
+//   output[out_idx] = acc < 0.0f ? 0.0f : acc;
+// }
+// SpinalGPU note:
+// - The kernel uses one CTA and one thread per output neuron, so it behaves like a tiny dense inference block.
+// - ReLU is expressed branchlessly because the repo still faults on non-uniform branches.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry linear_bias_relu_f32(
+    .param .u32 weights_ptr,
+    .param .u32 input_ptr,
+    .param .u32 bias_ptr,
+    .param .u32 out_ptr,
+    .param .u32 input_dim,
+    .param .u32 output_dim
+)
+{
+    .reg .u32 %r<14>;
+    .reg .f32 %f<5>;
+    .pred %p<2>;
+
+    // Setup
+    // Load the base pointers plus the input and output sizes for the tiny dense layer.
+    ld.param.u32 %r0, [weights_ptr];
+    ld.param.u32 %r1, [input_ptr];
+    ld.param.u32 %r2, [bias_ptr];
+    ld.param.u32 %r3, [out_ptr];
+    ld.param.u32 %r4, [input_dim];
+    ld.param.u32 %r5, [output_dim];
+    mov.u32 %r6, %tid.x;
+
+    // Guard the one-thread-per-output mapping against threads outside the output width.
+    setp.lt.u32 %p0, %r6, %r5;
+    @!%p0 bra done;
+
+    // Core
+    // Initialize the FP32 accumulator and the feature-loop counter.
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r7, 0;
+
+loop:
+    // Continue while k < input_dim.
+    setp.lt.u32 %p1, %r7, %r4;
+    @!%p1 bra post_loop;
+
+    // Compute the row-major weight address for weights[out_idx * input_dim + k].
+    mul.lo.u32 %r8, %r6, %r4;
+    add.u32 %r8, %r8, %r7;
+    shl.b32 %r9, %r8, 2;
+    add.u32 %r10, %r0, %r9;
+    ld.global.f32 %f1, [%r10];
+
+    // Load the corresponding input feature input[k].
+    shl.b32 %r11, %r7, 2;
+    add.u32 %r12, %r1, %r11;
+    ld.global.f32 %f2, [%r12];
+
+    // Accumulate one multiply-add term of the dense layer.
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+
+    add.u32 %r7, %r7, 1;
+    bra loop;
+
+post_loop:
+    // Add the per-output bias term.
+    shl.b32 %r13, %r6, 2;
+    add.u32 %r10, %r2, %r13;
+    ld.global.f32 %f3, [%r10];
+    add.f32 %f0, %f0, %f3;
+
+    // Apply branchless ReLU: max(acc, 0).
+    mov.f32 %f4, 0f00000000;
+    setp.lt.f32 %p1, %f0, %f4;
+    selp.f32 %f0, %f4, %f0, %p1;
+
+    // Write the activated output neuron.
+    add.u32 %r12, %r3, %r13;
+    st.global.f32 [%r12], %f0;
+
+done:
+    // Exit
+    ret;
+}

@@ -28,6 +28,9 @@ class CudaCoreArray(config: SmConfig) extends Component {
       is(B(Opcode.FADD, 8 bits)) {
         latency := config.fpAddLatency
       }
+      is(B(Opcode.FSUB, 8 bits), B(Opcode.FABS, 8 bits), B(Opcode.FNEG, 8 bits), B(Opcode.FSETEQ, 8 bits), B(Opcode.FSETLT, 8 bits)) {
+        latency := config.fpAddLatency
+      }
       is(B(Opcode.FMUL, 8 bits)) {
         latency := config.fpMulLatency
       }
@@ -81,14 +84,35 @@ class CudaCoreArray(config: SmConfig) extends Component {
       is(B(Opcode.SETLT, 8 bits)) {
         result := U(operandAUInt < operandBUInt, config.dataWidth bits)
       }
+      is(B(Opcode.SETLTS, 8 bits)) {
+        result := U(operandA.asSInt < operandB.asSInt, config.dataWidth bits)
+      }
       is(B(Opcode.FADD, 8 bits)) {
         result := Fp32Math.add(operandA, operandB).asUInt
+      }
+      is(B(Opcode.FSUB, 8 bits)) {
+        result := Fp32Math.sub(operandA, operandB).asUInt
       }
       is(B(Opcode.FMUL, 8 bits)) {
         result := Fp32Math.mul(operandA, operandB).asUInt
       }
       is(B(Opcode.FFMA, 8 bits)) {
         result := Fp32Math.fma(operandA, operandB, operandC).asUInt
+      }
+      is(B(Opcode.FABS, 8 bits)) {
+        result := Fp32Math.abs(operandA).asUInt
+      }
+      is(B(Opcode.FNEG, 8 bits)) {
+        result := Fp32Math.neg(operandA).asUInt
+      }
+      is(B(Opcode.FSETEQ, 8 bits)) {
+        result := U(Fp32Math.eq(operandA, operandB), config.dataWidth bits)
+      }
+      is(B(Opcode.FSETLT, 8 bits)) {
+        result := U(Fp32Math.lt(operandA, operandB), config.dataWidth bits)
+      }
+      is(B(Opcode.SEL, 8 bits)) {
+        result := Mux(operandC.orR, operandAUInt, operandBUInt)
       }
     }
 

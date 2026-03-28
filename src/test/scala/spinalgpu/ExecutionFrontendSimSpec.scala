@@ -10,7 +10,13 @@ import spinalgpu.toolchain.KernelCorpus
 abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
   protected val config: SmConfig = SmConfig.default
 
-  protected def waitForGpuTopCompletionSignal(dut: GpuTop, kernel: KernelCorpus.KernelCase): Unit = {
+  protected def waitForGpuTopCompletionSignal(
+      hostControl: AxiLite4Driver,
+      dut: GpuTop,
+      kernel: KernelCorpus.KernelCase
+  ): (Boolean, BigInt, BigInt) = {
+    // Wait on the live completion signal, then sample the host-visible registers once.
+    // This avoids the high-memory AXI-Lite polling pattern that can accumulate simulator fibers.
     var cycles = 0
     while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
       dut.coreClockDomain.waitSampling()
@@ -25,6 +31,12 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
         s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
         f"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
     )
+
+    val status = ExecutionTestUtils.readExecutionStatus(hostControl)
+    val fault = ((status >> 2) & 1) == 1
+    val faultCode = ExecutionTestUtils.readFaultCode(hostControl)
+    val faultPc = ExecutionTestUtils.readFaultPc(hostControl)
+    (fault, faultCode, faultPc)
   }
 
   protected def runGpuTopKernelCaseWithoutHarnessGate(kernel: KernelCorpus.KernelCase): Unit = {
@@ -40,11 +52,13 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
       hostControl.reset()
 
       KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
-      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
-      waitForGpuTopCompletionSignal(dut, kernel)
+      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
+      val (fault, faultCode, faultPc) = waitForGpuTopCompletionSignal(hostControl, dut, kernel)
       dut.coreClockDomain.waitSampling(8)
 
-      dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
+      withClue(f"faultCode=0x${faultCode.toString(16)} faultPc=0x${faultPc.toString(16)} ") {
+        fault shouldBe false
+      }
       kernel.expectation match {
         case KernelCorpus.KernelExpectation.Success(checks) =>
           checks.foreach(KernelCorpusTestUtils.assertSuccessCheck(memory, _, config.byteCount))
@@ -69,27 +83,17 @@ class MatrixMulF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   }
 }
 
+class LinearBiasReluF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  test("linear_bias_relu_f32 executes through GpuTop") {
+    runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.linearBiasReluF32)
+  }
+}
+
 class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("grid_id_store increments across successive GpuTop command submissions") {
     val kernel = KernelCorpus.gridIdStore
 
     SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
-      def waitForExecutionCompleteSignal(timeoutCycles: Int): Unit = {
-        var cycles = 0
-        while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < timeoutCycles) {
-          dut.coreClockDomain.waitSampling()
-          cycles += 1
-        }
-
-        assert(
-          dut.io.debugExecutionStatus.done.toBoolean,
-          s"${kernel.name} did not complete after $timeoutCycles cycles; " +
-            s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
-            s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
-            s"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
-        )
-      }
-
       dut.coreClockDomain.forkStimulus(period = 10)
       dut.coreClockDomain.assertReset()
       dut.coreClockDomain.waitSampling()
@@ -100,22 +104,49 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
       memory.start()
       hostControl.reset()
 
+      def waitForExecutionCompleteSignal(timeoutCycles: Int): (Boolean, BigInt, BigInt) = {
+        var cycles = 0
+        while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < timeoutCycles) {
+          dut.coreClockDomain.waitSampling()
+          cycles += 1
+        }
+
+        assert(
+          dut.io.debugExecutionStatus.done.toBoolean,
+          s"${kernel.name} did not complete after $cycles cycles; " +
+            s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
+            s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
+            s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
+            s"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
+        )
+
+        val status = ExecutionTestUtils.readExecutionStatus(hostControl)
+        val fault = ((status >> 2) & 1) == 1
+        val faultCode = ExecutionTestUtils.readFaultCode(hostControl)
+        val faultPc = ExecutionTestUtils.readFaultPc(hostControl)
+        (fault, faultCode, faultPc)
+      }
+
       KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
 
-      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
-      waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
+      val (firstFault, firstFaultCode, firstFaultPc) = waitForExecutionCompleteSignal(kernel.timeoutCycles)
       dut.coreClockDomain.waitSampling(8)
-      dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
+      withClue(f"faultCode=0x${firstFaultCode.toString(16)} faultPc=0x${firstFaultPc.toString(16)} ") {
+        firstFault shouldBe false
+      }
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(0)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
 
-      ExecutionTestUtils.clearDone(hostControl, dut.coreClockDomain)
+      ExecutionTestUtils.clearDone(hostControl)
       dut.coreClockDomain.waitSampling(4)
 
-      ExecutionTestUtils.submitKernelCommand(hostControl, dut.coreClockDomain, kernel.command)
-      waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
+      val (secondFault, secondFaultCode, secondFaultPc) = waitForExecutionCompleteSignal(kernel.timeoutCycles)
       dut.coreClockDomain.waitSampling(8)
-      dut.io.debugExecutionStatus.fault.toBoolean shouldBe false
+      withClue(f"faultCode=0x${secondFaultCode.toString(16)} faultPc=0x${secondFaultPc.toString(16)} ") {
+        secondFault shouldBe false
+      }
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(1)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
 

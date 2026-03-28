@@ -11,6 +11,13 @@ class IsaSpec extends AnyFunSuite with Matchers {
     val br = Isa.encodeBr(Opcode.BRNZ, rs0 = 8, offset = -4)
     val sys = Isa.encodeSys(Opcode.S2R, rd = 9, specialRegister = SpecialRegisterKind.TidX)
     val rrrr = Isa.encodeRrrr(Opcode.FFMA, rd = 10, rs0 = 11, rs1 = 12, rs2 = 13)
+    val signedCompare = Isa.encodeRrr(Opcode.SETLTS, rd = 14, rs0 = 15, rs1 = 16)
+    val select = Isa.encodeRrrr(Opcode.SEL, rd = 17, rs0 = 18, rs1 = 19, rs2 = 20)
+    val fpSub = Isa.encodeRrr(Opcode.FSUB, rd = 21, rs0 = 22, rs1 = 23)
+    val fpAbs = Isa.encodeRrr(Opcode.FABS, rd = 24, rs0 = 25, rs1 = 0)
+    val fpNeg = Isa.encodeRrr(Opcode.FNEG, rd = 26, rs0 = 27, rs1 = 0)
+    val fpSetEq = Isa.encodeRrr(Opcode.FSETEQ, rd = 28, rs0 = 29, rs1 = 30)
+    val fpSetLt = Isa.encodeRrr(Opcode.FSETLT, rd = 31, rs0 = 1, rs1 = 2)
 
     val decodedRrr = Isa.decodeWord(rrr)
     decodedRrr.format shouldBe InstructionFormat.Rrr
@@ -52,6 +59,23 @@ class IsaSpec extends AnyFunSuite with Matchers {
     decodedRrrr.rs0 shouldBe 11
     decodedRrrr.rs1 shouldBe 12
     decodedRrrr.rs2 shouldBe 13
+
+    val decodedSignedCompare = Isa.decodeWord(signedCompare)
+    decodedSignedCompare.format shouldBe InstructionFormat.Rrr
+    decodedSignedCompare.opcode shouldBe Opcode.SETLTS
+    decodedSignedCompare.reg shouldBe 14
+
+    val decodedSelect = Isa.decodeWord(select)
+    decodedSelect.format shouldBe InstructionFormat.Rrrr
+    decodedSelect.opcode shouldBe Opcode.SEL
+    decodedSelect.reg shouldBe 17
+    decodedSelect.rs2 shouldBe 20
+
+    Isa.decodeWord(fpSub).opcode shouldBe Opcode.FSUB
+    Isa.decodeWord(fpAbs).opcode shouldBe Opcode.FABS
+    Isa.decodeWord(fpNeg).opcode shouldBe Opcode.FNEG
+    Isa.decodeWord(fpSetEq).opcode shouldBe Opcode.FSETEQ
+    Isa.decodeWord(fpSetLt).opcode shouldBe Opcode.FSETLT
   }
 
   test("encodes and decodes the extended special-register set") {
@@ -86,7 +110,14 @@ class IsaSpec extends AnyFunSuite with Matchers {
   test("machine-code disassembler formats representative instructions") {
     Isa.disassemble(Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)) shouldBe "add r3, r1, r2"
     Isa.disassemble(Isa.encodeRrr(Opcode.FADD, rd = 6, rs0 = 7, rs1 = 8)) shouldBe "fadd r6, r7, r8"
+    Isa.disassemble(Isa.encodeRrr(Opcode.SETLTS, rd = 5, rs0 = 6, rs1 = 7)) shouldBe "setlts r5, r6, r7"
+    Isa.disassemble(Isa.encodeRrr(Opcode.FSUB, rd = 8, rs0 = 9, rs1 = 10)) shouldBe "fsub r8, r9, r10"
+    Isa.disassemble(Isa.encodeRrr(Opcode.FABS, rd = 11, rs0 = 12, rs1 = 0)) shouldBe "fabs r11, r12, r0"
+    Isa.disassemble(Isa.encodeRrr(Opcode.FNEG, rd = 13, rs0 = 14, rs1 = 0)) shouldBe "fneg r13, r14, r0"
+    Isa.disassemble(Isa.encodeRrr(Opcode.FSETEQ, rd = 15, rs0 = 16, rs1 = 17)) shouldBe "fseteq r15, r16, r17"
+    Isa.disassemble(Isa.encodeRrr(Opcode.FSETLT, rd = 18, rs0 = 19, rs1 = 20)) shouldBe "fsetlt r18, r19, r20"
     Isa.disassemble(Isa.encodeRrrr(Opcode.FFMA, rd = 9, rs0 = 10, rs1 = 11, rs2 = 12)) shouldBe "ffma r9, r10, r11, r12"
+    Isa.disassemble(Isa.encodeRrrr(Opcode.SEL, rd = 21, rs0 = 22, rs1 = 23, rs2 = 24)) shouldBe "sel r21, r22, r23, r24"
     Isa.disassemble(Isa.encodeRri(Opcode.ADDI, rd = 4, rs0 = 5, immediate = -7)) shouldBe "addi r4, r5, -7"
     Isa.disassemble(Isa.encodeMem(Opcode.LDG, reg = 6, base = 7, offset = 12)) shouldBe "ldg r6, [r7 + 12]"
     Isa.disassemble(Isa.encodeMem(Opcode.STG, reg = 6, base = 7, offset = 4)) shouldBe "stg [r7 + 4], r6"

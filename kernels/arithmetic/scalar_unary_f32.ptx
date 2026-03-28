@@ -1,0 +1,68 @@
+// Purpose: Apply scalar FP32 subtract, absolute value, and negate to one value per thread.
+// Primary feature: floating_point
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread owns one scalar element.
+// - The kernel loads one FP32 value from each input vector, subtracts them,
+// - takes the absolute value, negates the result, and stores the final scalar.
+//
+// Where this fits:
+// - This is the simplest direct teaching kernel for the scalar FP32 unary path.
+// - It isolates `sub.f32`, `abs.f32`, and `neg.f32` without loops or control flow.
+//
+// Key model details:
+// - The corpus launches exactly 8 threads, so the kernel can use `%tid.x` directly without a bounds guard.
+// - Input and output vectors live in global memory and are indexed in row-major scalar order.
+// - Element indices are shifted left by 2 to form byte addresses for FP32 loads and stores.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void scalar_unary_f32(const float* a, const float* b, float* out) {
+//   unsigned idx = threadIdx.x;
+//   float delta = a[idx] - b[idx];
+//   out[idx] = -fabsf(delta);
+// }
+//
+// SpinalGPU note:
+// - The launch is a one-CTA teaching launch with exactly one scalar output per thread.
+// - The goal is instruction-surface clarity, not a realistic vector-library kernel shape.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry scalar_unary_f32(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<8>;
+    .reg .f32 %f<3>;
+
+    // Setup
+    // Load the three vector base pointers and use %tid.x as the scalar element index.
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [out_ptr];
+    mov.u32 %r3, %tid.x;
+
+    // Core
+    // Convert the scalar index into a byte offset for FP32 traffic.
+    shl.b32 %r4, %r3, 2;
+    add.u32 %r5, %r0, %r4;
+    add.u32 %r6, %r1, %r4;
+    add.u32 %r7, %r2, %r4;
+
+    // Load a[idx] and b[idx], then apply subtract -> abs -> negate.
+    ld.global.f32 %f0, [%r5];
+    ld.global.f32 %f1, [%r6];
+    sub.f32 %f2, %f0, %f1;
+    abs.f32 %f2, %f2;
+    neg.f32 %f2, %f2;
+
+    // Write the transformed scalar result.
+    st.global.f32 [%r7], %f2;
+
+    // Exit
+    ret;
+}

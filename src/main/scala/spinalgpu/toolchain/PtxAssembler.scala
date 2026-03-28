@@ -105,6 +105,21 @@ object PtxAssembler {
     }
   }
 
+  private final case class FloatUnaryInstruction(opcode: Int, destination: String, source: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      Seq(
+        Isa.encodeRrr(
+          opcode,
+          rd = layout.requireFloatRegister(destination),
+          rs0 = layout.requireFloatRegister(source),
+          rs1 = 0
+        )
+      )
+    }
+  }
+
   private final case class FmaInstruction(destination: String, lhs: String, rhs: String, accumulate: String) extends PtxInstruction {
     override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
 
@@ -116,6 +131,32 @@ object PtxAssembler {
           rs0 = layout.requireFloatRegister(lhs),
           rs1 = layout.requireFloatRegister(rhs),
           rs2 = layout.requireFloatRegister(accumulate)
+        )
+      )
+    }
+  }
+
+  private final case class SelectInstruction(destination: String, whenTrue: String, whenFalse: String, predicate: String, floatData: Boolean)
+      extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      val rd =
+        if (floatData) layout.requireFloatRegister(destination)
+        else layout.requireIntegerRegister(destination)
+      val rs0 =
+        if (floatData) layout.requireFloatRegister(whenTrue)
+        else layout.requireIntegerRegister(whenTrue)
+      val rs1 =
+        if (floatData) layout.requireFloatRegister(whenFalse)
+        else layout.requireIntegerRegister(whenFalse)
+      Seq(
+        Isa.encodeRrrr(
+          Opcode.SEL,
+          rd = rd,
+          rs0 = rs0,
+          rs1 = rs1,
+          rs2 = layout.requirePredicate(predicate)
         )
       )
     }
@@ -190,7 +231,14 @@ object PtxAssembler {
     }
   }
 
-  private final case class SetPredicateInstruction(compareOpcode: Int, predicate: String, negateResult: Boolean, lhs: String, rhs: ValueOperand)
+  private final case class SetPredicateInstruction(
+      compareOpcode: Int,
+      predicate: String,
+      negateResult: Boolean,
+      lhs: String,
+      rhs: ValueOperand,
+      swapOperands: Boolean = false
+  )
       extends PtxInstruction {
     override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = {
       val compareCount = rhs match {
@@ -204,17 +252,22 @@ object PtxAssembler {
 
     override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
       val rd = layout.requirePredicate(predicate)
-      val rs0 = layout.requireIntegerRegister(lhs)
+      val lhsRegister = layout.requireIntegerRegister(lhs)
       val compareWords =
         rhs match {
           case RegisterOperand(name) =>
-            Seq(Isa.encodeRrr(compareOpcode, rd = rd, rs0 = rs0, rs1 = layout.requireIntegerRegister(name)))
+            val rhsRegister = layout.requireIntegerRegister(name)
+            val rs0 = if (swapOperands) rhsRegister else lhsRegister
+            val rs1 = if (swapOperands) lhsRegister else rhsRegister
+            Seq(Isa.encodeRrr(compareOpcode, rd = rd, rs0 = rs0, rs1 = rs1))
           case ImmediateOperand(0) =>
-            Seq(Isa.encodeRrr(compareOpcode, rd = rd, rs0 = rs0, rs1 = 0))
+            require(!swapOperands, "swapped compare does not support immediate rhs")
+            Seq(Isa.encodeRrr(compareOpcode, rd = rd, rs0 = lhsRegister, rs1 = 0))
           case ImmediateOperand(value) =>
+            require(!swapOperands, "swapped compare does not support immediate rhs")
             Seq(
               Isa.encodeRri(Opcode.MOVI, rd = layout.scratchRegister, rs0 = 0, immediate = value),
-              Isa.encodeRrr(compareOpcode, rd = rd, rs0 = rs0, rs1 = layout.scratchRegister)
+              Isa.encodeRrr(compareOpcode, rd = rd, rs0 = lhsRegister, rs1 = layout.scratchRegister)
             )
           case _ =>
             throw new IllegalArgumentException("setp expects a register or immediate rhs")
@@ -228,6 +281,96 @@ object PtxAssembler {
           Isa.encodeRrr(Opcode.XOR, rd = rd, rs0 = rd, rs1 = layout.scratchRegister)
         )
       }
+    }
+  }
+
+  private final case class FloatSetPredicateInstruction(predicate: String, relation: String, lhs: String, rhs: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int =
+      relation match {
+        case "eq" | "ne" | "lt" | "gt" => if (relation == "ne") 3 else 1
+        case "le" | "ge" => 3
+        case other => throw new IllegalArgumentException(s"unsupported f32 predicate relation: $other")
+      }
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      val rd = layout.requirePredicate(predicate)
+      val lhsRegister = layout.requireFloatRegister(lhs)
+      val rhsRegister = layout.requireFloatRegister(rhs)
+
+      relation match {
+        case "eq" =>
+          Seq(Isa.encodeRrr(Opcode.FSETEQ, rd = rd, rs0 = lhsRegister, rs1 = rhsRegister))
+        case "ne" =>
+          Seq(
+            Isa.encodeRrr(Opcode.FSETEQ, rd = rd, rs0 = lhsRegister, rs1 = rhsRegister),
+            Isa.encodeRri(Opcode.MOVI, rd = layout.scratchRegister, rs0 = 0, immediate = 1),
+            Isa.encodeRrr(Opcode.XOR, rd = rd, rs0 = rd, rs1 = layout.scratchRegister)
+          )
+        case "lt" =>
+          Seq(Isa.encodeRrr(Opcode.FSETLT, rd = rd, rs0 = lhsRegister, rs1 = rhsRegister))
+        case "gt" =>
+          Seq(Isa.encodeRrr(Opcode.FSETLT, rd = rd, rs0 = rhsRegister, rs1 = lhsRegister))
+        case "le" =>
+          Seq(
+            Isa.encodeRrr(Opcode.FSETLT, rd = rd, rs0 = lhsRegister, rs1 = rhsRegister),
+            Isa.encodeRrr(Opcode.FSETEQ, rd = layout.scratchRegister, rs0 = lhsRegister, rs1 = rhsRegister),
+            Isa.encodeRrr(Opcode.OR, rd = rd, rs0 = rd, rs1 = layout.scratchRegister)
+          )
+        case "ge" =>
+          Seq(
+            Isa.encodeRrr(Opcode.FSETLT, rd = rd, rs0 = rhsRegister, rs1 = lhsRegister),
+            Isa.encodeRrr(Opcode.FSETEQ, rd = layout.scratchRegister, rs0 = lhsRegister, rs1 = rhsRegister),
+            Isa.encodeRrr(Opcode.OR, rd = rd, rs0 = rd, rs1 = layout.scratchRegister)
+          )
+      }
+    }
+  }
+
+  private final case class MinMaxInstruction(destination: String, lhs: String, rhs: String, compareOpcode: Int, floatData: Boolean, selectMax: Boolean)
+      extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 2
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      val rd =
+        if (floatData) layout.requireFloatRegister(destination)
+        else layout.requireIntegerRegister(destination)
+      val lhsRegister =
+        if (floatData) layout.requireFloatRegister(lhs)
+        else layout.requireIntegerRegister(lhs)
+      val rhsRegister =
+        if (floatData) layout.requireFloatRegister(rhs)
+        else layout.requireIntegerRegister(rhs)
+      val whenTrue = if (selectMax) rhsRegister else lhsRegister
+      val whenFalse = if (selectMax) lhsRegister else rhsRegister
+      Seq(
+        Isa.encodeRrr(compareOpcode, rd = layout.scratchRegister, rs0 = lhsRegister, rs1 = rhsRegister),
+        Isa.encodeRrrr(Opcode.SEL, rd = rd, rs0 = whenTrue, rs1 = whenFalse, rs2 = layout.scratchRegister)
+      )
+    }
+  }
+
+  private final case class MadLoInstruction(destination: String, lhs: String, rhs: String, addend: ValueOperand) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 2
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] = {
+      val product = Isa.encodeRrr(
+        Opcode.MULLO,
+        rd = layout.scratchRegister,
+        rs0 = layout.requireIntegerRegister(lhs),
+        rs1 = layout.requireIntegerRegister(rhs)
+      )
+
+      val addWords =
+        addend match {
+          case RegisterOperand(name) =>
+            Seq(Isa.encodeRrr(Opcode.ADD, rd = layout.requireIntegerRegister(destination), rs0 = layout.scratchRegister, rs1 = layout.requireIntegerRegister(name)))
+          case ImmediateOperand(value) =>
+            Seq(Isa.encodeRri(Opcode.ADDI, rd = layout.requireIntegerRegister(destination), rs0 = layout.scratchRegister, immediate = value))
+          case _ =>
+            throw new IllegalArgumentException("mad.lo.u32 expects a register or immediate addend")
+        }
+
+      product +: addWords
     }
   }
 
@@ -567,6 +710,12 @@ object PtxAssembler {
       trimmed
     }
 
+    def parsePredicateName(token: String): String = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("%p"), s"expected %p predicate, got: $trimmed")
+      trimmed
+    }
+
     def parseScalarOperand(token: String): ValueOperand = {
       val trimmed = token.trim
       if (trimmed.startsWith("%r")) {
@@ -669,12 +818,36 @@ object PtxAssembler {
               case "sub.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.SUB, None, destination, lhs, parseScalarOperand(rhs))
+              case "and.b32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                BinaryInstruction(Opcode.AND, None, destination, lhs, parseScalarOperand(rhs))
+              case "or.b32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                BinaryInstruction(Opcode.OR, None, destination, lhs, parseScalarOperand(rhs))
+              case "xor.b32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                BinaryInstruction(Opcode.XOR, None, destination, lhs, parseScalarOperand(rhs))
+              case "shr.b32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                BinaryInstruction(Opcode.SHR, None, destination, lhs, parseScalarOperand(rhs))
               case "mul.lo.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.MULLO, None, destination, lhs, parseScalarOperand(rhs))
+              case "mad.lo.u32" =>
+                val Seq(destination, lhs, rhs, addend) = parseOperands(rest, 4)
+                MadLoInstruction(parseIntegerRegisterName(destination), parseIntegerRegisterName(lhs), parseIntegerRegisterName(rhs), parseScalarOperand(addend))
               case "mul.f32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 FloatBinaryInstruction(Opcode.FMUL, parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs))
+              case "sub.f32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                FloatBinaryInstruction(Opcode.FSUB, parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs))
+              case "neg.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FNEG, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "abs.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FABS, parseFloatRegisterName(destination), parseFloatRegisterName(source))
               case "fma.rn.f32" =>
                 val Seq(destination, lhs, rhs, accumulate) = parseOperands(rest, 4)
                 FmaInstruction(
@@ -688,13 +861,94 @@ object PtxAssembler {
                 BinaryInstruction(Opcode.SHL, None, destination, lhs, parseScalarOperand(rhs))
               case "setp.eq.u32" =>
                 val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
-                SetPredicateInstruction(Opcode.SETEQ, predicate, negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+                SetPredicateInstruction(Opcode.SETEQ, parsePredicateName(predicate), negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
               case "setp.ne.u32" =>
                 val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
-                SetPredicateInstruction(Opcode.SETEQ, predicate, negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+                SetPredicateInstruction(Opcode.SETEQ, parsePredicateName(predicate), negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
               case "setp.lt.u32" =>
                 val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
-                SetPredicateInstruction(Opcode.SETLT, predicate, negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+                SetPredicateInstruction(Opcode.SETLT, parsePredicateName(predicate), negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+              case "setp.gt.u32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLT, parsePredicateName(predicate), negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs), swapOperands = true)
+              case "setp.le.u32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLT, parsePredicateName(predicate), negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs), swapOperands = true)
+              case "setp.ge.u32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLT, parsePredicateName(predicate), negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+              case "setp.eq.s32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETEQ, parsePredicateName(predicate), negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+              case "setp.ne.s32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETEQ, parsePredicateName(predicate), negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+              case "setp.lt.s32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLTS, parsePredicateName(predicate), negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+              case "setp.gt.s32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLTS, parsePredicateName(predicate), negateResult = false, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs), swapOperands = true)
+              case "setp.le.s32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLTS, parsePredicateName(predicate), negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs), swapOperands = true)
+              case "setp.ge.s32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                SetPredicateInstruction(Opcode.SETLTS, parsePredicateName(predicate), negateResult = true, lhs = parseIntegerRegisterName(lhs), rhs = parseScalarOperand(rhs))
+              case "setp.eq.f32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                FloatSetPredicateInstruction(parsePredicateName(predicate), relation = "eq", lhs = parseFloatRegisterName(lhs), rhs = parseFloatRegisterName(rhs))
+              case "setp.ne.f32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                FloatSetPredicateInstruction(parsePredicateName(predicate), relation = "ne", lhs = parseFloatRegisterName(lhs), rhs = parseFloatRegisterName(rhs))
+              case "setp.lt.f32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                FloatSetPredicateInstruction(parsePredicateName(predicate), relation = "lt", lhs = parseFloatRegisterName(lhs), rhs = parseFloatRegisterName(rhs))
+              case "setp.gt.f32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                FloatSetPredicateInstruction(parsePredicateName(predicate), relation = "gt", lhs = parseFloatRegisterName(lhs), rhs = parseFloatRegisterName(rhs))
+              case "setp.le.f32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                FloatSetPredicateInstruction(parsePredicateName(predicate), relation = "le", lhs = parseFloatRegisterName(lhs), rhs = parseFloatRegisterName(rhs))
+              case "setp.ge.f32" =>
+                val Seq(predicate, lhs, rhs) = parseOperands(rest, 3)
+                FloatSetPredicateInstruction(parsePredicateName(predicate), relation = "ge", lhs = parseFloatRegisterName(lhs), rhs = parseFloatRegisterName(rhs))
+              case "selp.u32" =>
+                val Seq(destination, whenTrue, whenFalse, predicate) = parseOperands(rest, 4)
+                SelectInstruction(
+                  destination = parseIntegerRegisterName(destination),
+                  whenTrue = parseIntegerRegisterName(whenTrue),
+                  whenFalse = parseIntegerRegisterName(whenFalse),
+                  predicate = parsePredicateName(predicate),
+                  floatData = false
+                )
+              case "selp.f32" =>
+                val Seq(destination, whenTrue, whenFalse, predicate) = parseOperands(rest, 4)
+                SelectInstruction(
+                  destination = parseFloatRegisterName(destination),
+                  whenTrue = parseFloatRegisterName(whenTrue),
+                  whenFalse = parseFloatRegisterName(whenFalse),
+                  predicate = parsePredicateName(predicate),
+                  floatData = true
+                )
+              case "min.u32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                MinMaxInstruction(parseIntegerRegisterName(destination), parseIntegerRegisterName(lhs), parseIntegerRegisterName(rhs), Opcode.SETLT, floatData = false, selectMax = false)
+              case "max.u32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                MinMaxInstruction(parseIntegerRegisterName(destination), parseIntegerRegisterName(lhs), parseIntegerRegisterName(rhs), Opcode.SETLT, floatData = false, selectMax = true)
+              case "min.s32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                MinMaxInstruction(parseIntegerRegisterName(destination), parseIntegerRegisterName(lhs), parseIntegerRegisterName(rhs), Opcode.SETLTS, floatData = false, selectMax = false)
+              case "max.s32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                MinMaxInstruction(parseIntegerRegisterName(destination), parseIntegerRegisterName(lhs), parseIntegerRegisterName(rhs), Opcode.SETLTS, floatData = false, selectMax = true)
+              case "min.f32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                MinMaxInstruction(parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs), Opcode.FSETLT, floatData = true, selectMax = false)
+              case "max.f32" =>
+                val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
+                MinMaxInstruction(parseFloatRegisterName(destination), parseFloatRegisterName(lhs), parseFloatRegisterName(rhs), Opcode.FSETLT, floatData = true, selectMax = true)
               case "ld.param.u32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 LoadInstruction("param", destination, parseMemoryOperand(source))

@@ -1,0 +1,75 @@
+// Purpose: Compute one SVM-style hinge-loss contribution per thread.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - One thread owns one training example.
+// - The kernel loads the label, score, and margin term for that example.
+// - It computes `margin - label * score`, then clamps negative values to zero.
+// - The resulting per-example hinge contribution is written back to global memory.
+// Where this fits:
+// - This is the classical-ML-oriented kernel in the scalar PTX-completeness phase.
+// - It exercises `sub.f32`, FP compare, and FP select on top of the existing multiply path.
+// - It keeps the computation reduction-free so it fits the current one-CTA SIMT model.
+// Key model details:
+// - Labels, scores, margins, and outputs are all plain FP32 vectors in global memory.
+// - `%tid.x` is the example index and `shl.b32` scales to FP32 byte addresses.
+// - The clamp to zero is branchless so the kernel never touches the divergence fault path.
+// CUDA-equivalent sketch (.cu):
+// __global__ void hinge_step_f32(
+//     const float* labels, const float* scores, const float* margins, float* output) {
+//   unsigned idx = threadIdx.x;
+//   float loss = margins[idx] - (labels[idx] * scores[idx]);
+//   output[idx] = loss < 0.0f ? 0.0f : loss;
+// }
+// SpinalGPU note:
+// - This is a classical ML primitive rather than a neural-network layer, but it still maps cleanly
+//   onto the current scalar CUDA-core path.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry hinge_step_f32(
+    .param .u32 labels_ptr,
+    .param .u32 scores_ptr,
+    .param .u32 margins_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<9>;
+    .reg .f32 %f<5>;
+    .pred %p<1>;
+
+    // Setup
+    // Load the four global pointers and form the FP32 byte offset for this example.
+    ld.param.u32 %r0, [labels_ptr];
+    ld.param.u32 %r1, [scores_ptr];
+    ld.param.u32 %r2, [margins_ptr];
+    ld.param.u32 %r3, [out_ptr];
+    mov.u32 %r4, %tid.x;
+    shl.b32 %r5, %r4, 2;
+
+    // Core
+    // Load label, score, and margin for this example.
+    add.u32 %r6, %r0, %r5;
+    ld.global.f32 %f0, [%r6];
+    add.u32 %r7, %r1, %r5;
+    ld.global.f32 %f1, [%r7];
+    add.u32 %r8, %r2, %r5;
+    ld.global.f32 %f2, [%r8];
+
+    // Compute margin - label * score.
+    mul.f32 %f3, %f0, %f1;
+    sub.f32 %f4, %f2, %f3;
+
+    // Clamp negative values to zero with branchless compare/select.
+    mov.f32 %f0, 0f00000000;
+    setp.lt.f32 %p0, %f4, %f0;
+    selp.f32 %f4, %f0, %f4, %p0;
+
+    // Store the hinge contribution.
+    add.u32 %r6, %r3, %r5;
+    st.global.f32 [%r6], %f4;
+
+    // Exit
+    ret;
+}

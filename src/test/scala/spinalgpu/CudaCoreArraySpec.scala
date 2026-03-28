@@ -115,4 +115,118 @@ class CudaCoreArraySpec extends AnyFunSuite with Matchers {
       dut.io.response.ready #= true
     }
   }
+
+  test("signed compare, branchless select, and scalar FP unary ops return exact lane results") {
+    SimConfig.withVerilator.compile(new CudaCoreArray(config)).doSim { dut =>
+      implicit val implicitDut: CudaCoreArray = dut
+      dut.clockDomain.forkStimulus(period = 10)
+      initDefaults(dut)
+
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.SETLTS
+      dut.io.issue.payload.activeMask #= 0x03
+      dut.io.issue.payload.operandA(0) #= ExecutionTestUtils.u32(-4).toLong
+      dut.io.issue.payload.operandB(0) #= ExecutionTestUtils.u32(2).toLong
+      dut.io.issue.payload.operandA(1) #= ExecutionTestUtils.u32(7).toLong
+      dut.io.issue.payload.operandB(1) #= ExecutionTestUtils.u32(-1).toLong
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling(subwarpSliceCount - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(1)
+      dut.io.response.payload.result(1).toBigInt shouldBe BigInt(0)
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.SEL
+      dut.io.issue.payload.activeMask #= 0x03
+      dut.io.issue.payload.operandA(0) #= 11
+      dut.io.issue.payload.operandB(0) #= 33
+      dut.io.issue.payload.operandC(0) #= 1
+      dut.io.issue.payload.operandA(1) #= 22
+      dut.io.issue.payload.operandB(1) #= 44
+      dut.io.issue.payload.operandC(1) #= 0
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling(subwarpSliceCount - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(11)
+      dut.io.response.payload.result(1).toBigInt shouldBe BigInt(44)
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.FSUB
+      dut.io.issue.payload.activeMask #= 0x03
+      dut.io.issue.payload.operandA(0) #= ExecutionTestUtils.f32Bits(4.5f)
+      dut.io.issue.payload.operandB(0) #= ExecutionTestUtils.f32Bits(1.25f)
+      dut.io.issue.payload.operandA(1) #= ExecutionTestUtils.f32Bits(-1.0f)
+      dut.io.issue.payload.operandB(1) #= ExecutionTestUtils.f32Bits(2.5f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fpAddLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(ExecutionTestUtils.f32Bits(3.25f))
+      dut.io.response.payload.result(1).toBigInt shouldBe BigInt(ExecutionTestUtils.f32Bits(-3.5f))
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.FNEG
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= ExecutionTestUtils.f32Bits(1.5f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fpAddLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(ExecutionTestUtils.f32Bits(-1.5f))
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.FABS
+      dut.io.issue.payload.activeMask #= 0x01
+      dut.io.issue.payload.operandA(0) #= ExecutionTestUtils.f32Bits(-2.25f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fpAddLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(ExecutionTestUtils.f32Bits(2.25f))
+      dut.io.response.ready #= true
+      dut.clockDomain.waitSampling()
+
+      initDefaults(dut)
+      dut.io.issue.valid #= true
+      dut.io.issue.payload.opcode #= Opcode.FSETLT
+      dut.io.issue.payload.activeMask #= 0x03
+      dut.io.issue.payload.operandA(0) #= ExecutionTestUtils.f32Bits(1.0f)
+      dut.io.issue.payload.operandB(0) #= ExecutionTestUtils.f32Bits(2.0f)
+      dut.io.issue.payload.operandA(1) #= ExecutionTestUtils.f32Bits(3.0f)
+      dut.io.issue.payload.operandB(1) #= ExecutionTestUtils.f32Bits(-1.0f)
+
+      dut.clockDomain.waitSampling()
+      dut.io.issue.valid #= false
+      dut.clockDomain.waitSampling((config.fpAddLatency * subwarpSliceCount) - 1)
+      dut.io.response.valid.toBoolean shouldBe false
+      waitUntil(timeoutCycles = 4) { dut.io.response.valid.toBoolean }
+      dut.io.response.payload.result(0).toBigInt shouldBe BigInt(1)
+      dut.io.response.payload.result(1).toBigInt shouldBe BigInt(0)
+      dut.io.response.ready #= true
+    }
+  }
 }

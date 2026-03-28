@@ -47,11 +47,18 @@ Immediate and branch offsets are signed 14-bit values.
 | `0x1A` | `setlt` | Set `1` when unsigned less-than, else `0` |
 | `0x1B` | `fadd` | FP32 add |
 | `0x1C` | `fmul` | FP32 multiply |
-| `0x1D` | `ffma` | FP32 fused multiply-add |
+| `0x1D` | `ffma` | FP32 three-source multiply-add |
+| `0x1E` | `setlts` | Set `1` when signed less-than, else `0` |
+| `0x1F` | `fsub` | FP32 subtract |
 | `0x20` | `ldg` | Load from global memory |
 | `0x21` | `stg` | Store to global memory |
 | `0x22` | `lds` | Load from shared memory |
 | `0x23` | `sts` | Store to shared memory |
+| `0x24` | `sel` | Select `rs0` or `rs1` using `rs2` as the condition |
+| `0x25` | `fabs` | FP32 absolute value |
+| `0x26` | `fneg` | FP32 negate |
+| `0x27` | `fseteq` | Set `1` when ordered FP32 equal, else `0` |
+| `0x28` | `fsetlt` | Set `1` when ordered FP32 less-than, else `0` |
 | `0x30` | `bra` | Unconditional branch |
 | `0x31` | `brz` | Uniform branch if all active lanes are zero |
 | `0x32` | `brnz` | Uniform branch if all active lanes are non-zero |
@@ -92,6 +99,8 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and t
 
 ## Execution Notes
 
-- `fadd`, `fmul`, and `ffma` execute on the CUDA-core datapath. `ffma` is the only current user of the `RRRR` format.
+- `fadd`, `fmul`, `ffma`, `fsub`, `fabs`, `fneg`, `fseteq`, `fsetlt`, and `sel` execute on the CUDA-core datapath.
+- `ffma` and `sel` are the current users of the `RRRR` format.
+- PTX `fma.rn.f32` lowers to machine `ffma`, but the current repo implementation computes it as FP32 multiply followed by FP32 add rather than a single-round fused IEEE FMA.
 - `ldg` and `stg` are typeless 32-bit machine-memory ops. PTX `.u32`, `.f32`, and the narrow lowered `%gridid` `.u64` path all reuse them.
 - Instruction fetch remains single-word. Global LSU traffic is burst-capable and coalesces contiguous active-lane 32-bit accesses into multi-beat requests up to `cudaLaneCount` beats.

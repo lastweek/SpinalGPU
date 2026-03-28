@@ -185,6 +185,70 @@ object KernelCorpus {
     }
   }
 
+  private val reluClampInput: Seq[Float] = Seq(-3.0f, -1.0f, 0.25f, 1.5f, 2.5f, 4.0f, 7.0f, 8.5f)
+  private val reluClampLimit: Seq[Float] = Seq.fill(8)(3.5f)
+  private val reluClampExpected: Seq[Float] =
+    reluClampInput.zip(reluClampLimit).map { case (value, limit) => value.min(limit).max(0.0f) }
+
+  private def linearBiasReluInput(featureCount: Int): Seq[Float] =
+    (0 until featureCount).map(index => (index.toFloat * 0.5f) - 1.0f)
+
+  private def linearBiasReluWeights(outputCount: Int, featureCount: Int): Seq[Float] =
+    for {
+      row <- 0 until outputCount
+      col <- 0 until featureCount
+    } yield ((row + 1).toFloat * 0.2f) - ((col + 1).toFloat * 0.1f)
+
+  private def linearBiasReluBias(outputCount: Int): Seq[Float] =
+    (0 until outputCount).map(index => if ((index & 1) == 0) -0.75f else 0.25f)
+
+  private def linearBiasReluExpected(outputCount: Int, featureCount: Int): Seq[Float] = {
+    val input = linearBiasReluInput(featureCount)
+    val weights = linearBiasReluWeights(outputCount, featureCount)
+    val bias = linearBiasReluBias(outputCount)
+    (0 until outputCount).map { row =>
+      var sum = 0.0f
+      var col = 0
+      while (col < featureCount) {
+        sum = sum + (weights(row * featureCount + col) * input(col))
+        col += 1
+      }
+      sum = sum + bias(row)
+      sum.max(0.0f)
+    }
+  }
+
+  private val hingeLabels: Seq[Float] = Seq(1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f)
+  private val hingeScores: Seq[Float] = Seq(2.0f, 0.3f, -0.5f, -2.0f, 1.0f, -1.5f, 0.2f, 3.0f)
+  private val hingeMargins: Seq[Float] = Seq.fill(8)(1.0f)
+  private val hingeExpected: Seq[Float] =
+    hingeLabels.zip(hingeScores).zip(hingeMargins).map { case ((label, score), margin) => (margin - (label * score)).max(0.0f) }
+
+  private val bitopsInputA: Seq[Long] = Seq(0x12345678L, 0xCAFEBABEL, 0x0F0F0F0FL, 0x13579BDFL, 0x89ABCDEFL, 0x01020304L, 0xFFFFFFFFL, 0x2468ACE0L)
+  private val bitopsInputB: Seq[Long] = Seq(0x89ABCDEFL, 0x10203040L, 0xF0F0F0F0L, 0xAAAAAAAAL, 0x55555555L, 0xFEDCBA98L, 0x00000000L, 0x13579BDFL)
+  private val bitopsExpected: Seq[Long] =
+    bitopsInputA.zip(bitopsInputB).map { case (a, b) =>
+      ((((a & 0x000000FFL) ^ (b | 0x00000F0FL)) >>> 4) & 0xFFFFFFFFL)
+    }
+
+  private val scalarUnaryInputA: Seq[Float] = Seq(1.0f, -2.5f, 3.75f, -4.0f, 0.5f, -0.75f, 2.25f, -3.5f)
+  private val scalarUnaryInputB: Seq[Float] = Seq(0.5f, -1.0f, 1.25f, -6.0f, 0.25f, 0.75f, -2.25f, 3.5f)
+  private val scalarUnaryExpected: Seq[Float] =
+    scalarUnaryInputA.zip(scalarUnaryInputB).map { case (a, b) => -Math.abs((a - b).toDouble).toFloat }
+
+  private val scalarMinSignedInputA: Seq[Int] = Seq(-10, 5, -3, 7, -100, 42, 0, Int.MaxValue)
+  private val scalarMinSignedInputB: Seq[Int] = Seq(3, -5, -8, 7, -50, 100, -1, Int.MinValue + 1)
+  private val scalarMinSignedExpected: Seq[Int] =
+    scalarMinSignedInputA.zip(scalarMinSignedInputB).map { case (a, b) => Math.min(a, b) }
+
+  private val scalarMadInputA: Seq[Long] = Seq(0L, 1L, 2L, 3L, 4L, 5L, 6L, 7L)
+  private val scalarMadInputB: Seq[Long] = Seq(8L, 7L, 6L, 5L, 4L, 3L, 2L, 1L)
+  private val scalarMadInputC: Seq[Long] = Seq(9L, 10L, 11L, 12L, 13L, 14L, 15L, 16L)
+  private val scalarMadExpected: Seq[Long] =
+    scalarMadInputA.zip(scalarMadInputB).zip(scalarMadInputC).map { case ((a, b), c) =>
+      ((a * b) + c) & 0xFFFFFFFFL
+    }
+
   val addStoreExit: KernelCase = KernelCase(
     name = "add_store_exit",
     relativeSourcePath = "arithmetic/add_store_exit.ptx",
@@ -331,6 +395,135 @@ object KernelCorpus {
     harnessTargets = Seq(StreamingMultiprocessor)
   )
 
+  val reluClampF32: KernelCase = KernelCase(
+    name = "relu_clamp_f32",
+    relativeSourcePath = "arithmetic/relu_clamp_f32.ptx",
+    purpose = "Clamp an FP32 vector to [0, clamp_hi] with branchless compare and select.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x3A0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x2000, values = reluClampInput),
+      WriteDataF32(base = 0x2100, values = reluClampLimit),
+      WriteArgBuffer(base = 0x3A0, values = Seq(0x2000L, 0x2100L, 0x2200L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x2200, values = reluClampExpected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val linearBiasReluF32: KernelCase = KernelCase(
+    name = "linear_bias_relu_f32",
+    relativeSourcePath = "arithmetic/linear_bias_relu_f32.ptx",
+    purpose = "Compute a one-CTA dense layer followed by bias add and ReLU.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x3E0),
+    timeoutCycles = 120000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x3000, values = linearBiasReluWeights(outputCount = 8, featureCount = 8)),
+      WriteDataF32(base = 0x3200, values = linearBiasReluInput(featureCount = 8)),
+      WriteDataF32(base = 0x3300, values = linearBiasReluBias(outputCount = 8)),
+      WriteArgBuffer(base = 0x3E0, values = Seq(0x3000L, 0x3200L, 0x3300L, 0x3400L, 8L, 8L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x3400, values = linearBiasReluExpected(outputCount = 8, featureCount = 8)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val hingeStepF32: KernelCase = KernelCase(
+    name = "hinge_step_f32",
+    relativeSourcePath = "arithmetic/hinge_step_f32.ptx",
+    purpose = "Compute one SVM-style hinge-loss contribution per thread.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x420),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x4000, values = hingeLabels),
+      WriteDataF32(base = 0x4100, values = hingeScores),
+      WriteDataF32(base = 0x4200, values = hingeMargins),
+      WriteArgBuffer(base = 0x420, values = Seq(0x4000L, 0x4100L, 0x4200L, 0x4300L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x4300, values = hingeExpected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val bitopsPackU32: KernelCase = KernelCase(
+    name = "bitops_pack_u32",
+    relativeSourcePath = "arithmetic/bitops_pack_u32.ptx",
+    purpose = "Apply integer bit masks, XOR, and logical right shift to packed 32-bit data.",
+    primaryFeature = Arithmetic,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x460),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0x5000, values = bitopsInputA),
+      WriteDataWords(base = 0x5100, values = bitopsInputB),
+      WriteArgBuffer(base = 0x460, values = Seq(0x5000L, 0x5100L, 0x5200L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x5200, values = bitopsExpected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val scalarUnaryF32: KernelCase = KernelCase(
+    name = "scalar_unary_f32",
+    relativeSourcePath = "arithmetic/scalar_unary_f32.ptx",
+    purpose = "Apply scalar FP32 subtract, absolute value, and negate to one value per thread.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x4A0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x5400, values = scalarUnaryInputA),
+      WriteDataF32(base = 0x5500, values = scalarUnaryInputB),
+      WriteArgBuffer(base = 0x4A0, values = Seq(0x5400L, 0x5500L, 0x5600L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x5600, values = scalarUnaryExpected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val scalarMinS32: KernelCase = KernelCase(
+    name = "scalar_min_s32",
+    relativeSourcePath = "arithmetic/scalar_min_s32.ptx",
+    purpose = "Compute the signed minimum of two 32-bit scalar inputs per thread.",
+    primaryFeature = Arithmetic,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x4E0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0x5800, values = scalarMinSignedInputA.map(_.toLong & 0xFFFFFFFFL)),
+      WriteDataWords(base = 0x5900, values = scalarMinSignedInputB.map(_.toLong & 0xFFFFFFFFL)),
+      WriteArgBuffer(base = 0x4E0, values = Seq(0x5800L, 0x5900L, 0x5A00L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x5A00, values = scalarMinSignedExpected.map(_.toLong & 0xFFFFFFFFL)))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val scalarMadU32: KernelCase = KernelCase(
+    name = "scalar_mad_u32",
+    relativeSourcePath = "arithmetic/scalar_mad_u32.ptx",
+    purpose = "Compute one scalar mad.lo.u32 result per thread from three input vectors.",
+    primaryFeature = Arithmetic,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x520),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0x5C00, values = scalarMadInputA),
+      WriteDataWords(base = 0x5D00, values = scalarMadInputB),
+      WriteDataWords(base = 0x5E00, values = scalarMadInputC),
+      WriteArgBuffer(base = 0x520, values = Seq(0x5C00L, 0x5D00L, 0x5E00L, 0x5F00L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x5F00, values = scalarMadExpected))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
   val registerStress: KernelCase = KernelCase(
     name = "register_stress",
     relativeSourcePath = "arithmetic/register_stress.ptx",
@@ -390,6 +583,13 @@ object KernelCorpus {
     vectorAdd1Warp,
     matrixAddF32,
     matrixMulF32,
+    reluClampF32,
+    linearBiasReluF32,
+    hingeStepF32,
+    bitopsPackU32,
+    scalarUnaryF32,
+    scalarMinS32,
+    scalarMadU32,
     registerStress,
     nonUniformBranch,
     misalignedStore,

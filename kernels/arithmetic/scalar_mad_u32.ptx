@@ -1,0 +1,67 @@
+// Purpose: Compute one scalar mad.lo.u32 result per thread from three input vectors.
+// Primary feature: arithmetic
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread owns one triple of unsigned 32-bit inputs.
+// - The kernel loads A[idx], B[idx], and C[idx], computes `A * B + C` with `mad.lo.u32`,
+// - and stores the low 32-bit result to the output vector.
+//
+// Where this fits:
+// - This is the smallest execution-backed example for the `mad.lo.u32` PTX convenience form.
+// - It proves that the frontend lowering to `mul.lo.u32` plus `add.u32` behaves correctly in the full SM path.
+//
+// Key model details:
+// - The corpus launches exactly 8 threads, so `%tid.x` directly selects the scalar lane.
+// - Each input vector is stored in global memory as aligned 32-bit words.
+// - The kernel cares only about the low 32 bits of the multiply-add result, matching PTX `mad.lo.u32`.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void scalar_mad_u32(const unsigned* a, const unsigned* b,
+//                                const unsigned* c, unsigned* out) {
+//   unsigned idx = threadIdx.x;
+//   out[idx] = a[idx] * b[idx] + c[idx];
+// }
+//
+// SpinalGPU note:
+// - `mad.lo.u32` is a PTX frontend convenience form in this repo, not a dedicated machine opcode.
+// - This kernel exists to keep that lowering path covered by a concrete execution test.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry scalar_mad_u32(
+    .param .u32 a_ptr,
+    .param .u32 b_ptr,
+    .param .u32 c_ptr,
+    .param .u32 out_ptr
+)
+{
+    .reg .u32 %r<10>;
+
+    // Setup
+    // Load the four vector base pointers and use %tid.x as the scalar element index.
+    ld.param.u32 %r0, [a_ptr];
+    ld.param.u32 %r1, [b_ptr];
+    ld.param.u32 %r2, [c_ptr];
+    ld.param.u32 %r3, [out_ptr];
+    mov.u32 %r4, %tid.x;
+
+    // Core
+    // Convert the scalar index into a byte offset and form the four global addresses.
+    shl.b32 %r5, %r4, 2;
+    add.u32 %r6, %r0, %r5;
+    add.u32 %r7, %r1, %r5;
+    add.u32 %r8, %r2, %r5;
+    add.u32 %r9, %r3, %r5;
+
+    // Load the three unsigned scalars, compute mad.lo.u32, and store the low 32-bit result.
+    ld.global.u32 %r5, [%r6];
+    ld.global.u32 %r6, [%r7];
+    ld.global.u32 %r7, [%r8];
+    mad.lo.u32 %r8, %r5, %r6, %r7;
+    st.global.u32 [%r9], %r8;
+
+    // Exit
+    ret;
+}

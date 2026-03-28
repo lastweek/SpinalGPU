@@ -19,7 +19,7 @@ class GpuTopSimSpec extends AnyFunSuite with Matchers {
       memory.start()
       hostControl.reset()
 
-      ExecutionTestUtils.readExecutionStatus(hostControl, dut.coreClockDomain) shouldBe BigInt(0)
+      ExecutionTestUtils.readExecutionStatus(hostControl) shouldBe BigInt(0)
       dut.coreClockDomain.waitSampling(5)
 
       memory.stop()
