@@ -9,6 +9,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
     val request = slave(Stream(ExternalMemBurstReq(config)))
     val response = master(Stream(ExternalMemBurstRsp(config)))
     val axi = master(Axi4(config.axiConfig))
+    val idle = out Bool()
   }
 
   private object AdapterState extends SpinalEnum {
@@ -147,4 +148,6 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   when(io.response.fire) {
     rspValid := False
   }
+
+  io.idle := state === AdapterState.IDLE && !rspValid && !io.request.valid
 }

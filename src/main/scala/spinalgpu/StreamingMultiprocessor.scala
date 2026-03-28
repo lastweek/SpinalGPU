@@ -69,6 +69,24 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
     binding.localSlotId.init(0)
   }
 
+  private def clearWarpContext(target: WarpContext): Unit = {
+    target.valid := False
+    target.runnable := False
+    target.pc := U(0, config.addressWidth bits)
+    target.activeMask := B(0, config.warpSize bits)
+    target.threadBase := U(0, config.threadCountWidth bits)
+    target.threadBaseX := U(0, config.threadCountWidth bits)
+    target.threadBaseY := U(0, config.threadCountWidth bits)
+    target.threadBaseZ := U(0, config.threadCountWidth bits)
+    target.threadCount := U(0, config.threadCountWidth bits)
+    target.outstanding := False
+    target.exited := False
+    target.faulted := False
+  }
+
+  private val localContextViews =
+    Vec.fill(config.subSmCount)(Vec.fill(config.residentWarpsPerSubSm)(LocalSlotContextView(config)))
+
   smAdmissionController.io.command := io.command.command
   smAdmissionController.io.start := io.command.start
   smAdmissionController.io.clearDone := io.command.clearDone
@@ -113,13 +131,37 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   for (subSm <- 0 until config.subSmCount) {
     subSms(subSm).io.kernelBusy := partitionKernelBusy
     subSms(subSm).io.clearBindings := clearBindingsPulse
-    subSms(subSm).io.warpContexts := warpStateTable.io.states
     subSms(subSm).io.currentCommand := smAdmissionController.io.currentCommand
     subSms(subSm).io.currentGridId := smAdmissionController.io.currentGridId
     warpBinder.io.subSmRequest(subSm) := subSms(subSm).io.bindRequest
     warpBinder.io.freeLocalSlotId(subSm) := subSms(subSm).io.bindLocalSlotId
     subSms(subSm).io.bind.valid := warpBinder.io.bind.valid && warpBinder.io.bind.payload.subSmId === U(subSm, config.subSmIdWidth bits)
     subSms(subSm).io.bind.payload := warpBinder.io.bind.payload
+  }
+
+  for (subSm <- 0 until config.subSmCount) {
+    for (slot <- 0 until config.residentWarpsPerSubSm) {
+      localContextViews(subSm)(slot).occupied := False
+      localContextViews(subSm)(slot).warpId := U(0, config.warpIdWidth bits)
+      clearWarpContext(localContextViews(subSm)(slot).context)
+    }
+  }
+
+  for (warpId <- 0 until config.residentWarpCount) {
+    val binding = bindingTable(warpId)
+    for (subSm <- 0 until config.subSmCount) {
+      for (slot <- 0 until config.residentWarpsPerSubSm) {
+        when(binding.bound && binding.subSmId === U(subSm, config.subSmIdWidth bits) && binding.localSlotId === U(slot, config.localSlotIdWidth bits)) {
+          localContextViews(subSm)(slot).occupied := True
+          localContextViews(subSm)(slot).warpId := U(warpId, config.warpIdWidth bits)
+          localContextViews(subSm)(slot).context := warpStateTable.io.states(warpId)
+        }
+      }
+    }
+  }
+
+  for (subSm <- 0 until config.subSmCount) {
+    subSms(subSm).io.localContexts := localContextViews(subSm)
   }
 
   when(smAdmissionController.io.warpInitWrite.valid) {
@@ -147,8 +189,15 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   }
 
   private val allWarpTerminal = warpStateTable.io.states.map(context => !context.valid || context.exited || context.faulted).foldLeft(True)(_ && _)
-  private val allSubSmsIdle = subSms.map(_.io.debug.engineState === 0).foldLeft(True)(_ && _)
-  smAdmissionController.io.kernelComplete := smAdmissionController.io.executionStatus.busy && allWarpTerminal && allSubSmsIdle
+  private val allSubSmsIdle = subSms.map(_.io.status.idle).foldLeft(True)(_ && _)
+  private val sharedFabricsIdle =
+    l1InstructionCache.io.idle &&
+      l1DataSharedMemory.io.idle &&
+      externalMemoryArbiter.io.idle &&
+      externalMemoryAdapter.io.idle &&
+      !sharedMemory.io.clear.busy
+  smAdmissionController.io.kernelComplete :=
+    smAdmissionController.io.executionStatus.busy && allWarpTerminal && allSubSmsIdle && sharedFabricsIdle
 
   smAdmissionController.io.trapInfo.valid := False
   smAdmissionController.io.trapInfo.payload.warpId := U(0, config.warpIdWidth bits)
@@ -178,17 +227,17 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   private val activeEngineCandidates = Bits(config.subSmCount bits)
 
   for (subSm <- 0 until config.subSmCount) {
-    io.debug.subSmEngineStates(subSm) := subSms(subSm).io.debug.engineState
-    io.debug.subSmSelectedWarpIds(subSm) := subSms(subSm).io.debug.selectedWarpId
-    io.debug.subSmSelectedPcs(subSm) := subSms(subSm).io.debug.selectedPc
+    io.debug.subSmEngineStates(subSm) := subSms(subSm).io.status.engineState
+    io.debug.subSmSelectedWarpIds(subSm) := subSms(subSm).io.status.selectedWarpId
+    io.debug.subSmSelectedPcs(subSm) := subSms(subSm).io.status.selectedPc
     io.debug.subSmSlotOccupied(subSm) := subSms(subSm).io.debug.slotOccupied
     io.debug.subSmBoundWarpIds(subSm) := subSms(subSm).io.debug.boundWarpIds
     scheduledWarpCandidates(subSm) := subSms(subSm).io.debug.scheduledWarp.valid
     fetchResponseCandidates(subSm) := subSms(subSm).io.debug.fetchResponse.valid
     decodedInstructionCandidates(subSm) := subSms(subSm).io.debug.decodedInstruction.valid
     writebackCandidates(subSm) := subSms(subSm).io.debug.writeback.valid
-    trapCandidates(subSm) := subSms(subSm).io.debug.trap.valid
-    activeEngineCandidates(subSm) := subSms(subSm).io.debug.engineState =/= 0
+    trapCandidates(subSm) := subSms(subSm).io.status.trapValid
+    activeEngineCandidates(subSm) := !subSms(subSm).io.status.idle
   }
 
   for (subSm <- 0 until config.subSmCount) {
@@ -224,17 +273,17 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
     val earlierTrap = if (subSm == 0) False else trapCandidates(subSm - 1 downto 0).orR
     when(trapCandidates(subSm) && !earlierTrap) {
       smAdmissionController.io.trapInfo.valid := True
-      smAdmissionController.io.trapInfo.payload := subSms(subSm).io.debug.trap.payload
+      smAdmissionController.io.trapInfo.payload := subSms(subSm).io.status.trapInfo
       io.debug.trap.valid := True
-      io.debug.trap.payload := subSms(subSm).io.debug.trap.payload
+      io.debug.trap.payload := subSms(subSm).io.status.trapInfo
     }
 
     val earlierActiveEngine =
       if (subSm == 0) False else activeEngineCandidates(subSm - 1 downto 0).orR
     when(activeEngineCandidates(subSm) && !earlierActiveEngine) {
-      io.debug.engineState := subSms(subSm).io.debug.engineState
-      io.debug.selectedWarpId := subSms(subSm).io.debug.selectedWarpId
-      io.debug.selectedPc := subSms(subSm).io.debug.selectedPc
+      io.debug.engineState := subSms(subSm).io.status.engineState
+      io.debug.selectedWarpId := subSms(subSm).io.status.selectedWarpId
+      io.debug.selectedPc := subSms(subSm).io.status.selectedPc
     }
   }
 

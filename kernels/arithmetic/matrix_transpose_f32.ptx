@@ -1,0 +1,92 @@
+// Purpose: Transpose one FP32 row-major matrix using 2D thread coordinates.
+// Primary feature: floating_point
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread reads one source element A[row, col].
+// - %tid.x is the source column and %tid.y is the source row.
+// - After bounds checks, the kernel computes the row-major source address for A[row, col]
+//   and the transposed destination address for B[col, row], then performs one FP32 load
+//   and one FP32 store.
+//
+// Where this fits:
+// - This is the second basic matrix teaching kernel in the ladder.
+// - It makes the difference between source and destination row-major address formation
+//   explicit before the add/mul kernels add more arithmetic on top.
+//
+// Key model details:
+// - A and B live in global memory.
+// - lda and ldb are element strides.
+// - The source linear index is row * lda + col, while the transposed destination linear
+//   index is col * ldb + row.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void matrix_transpose_f32(const float* A, float* B,
+//                                      unsigned rows, unsigned cols,
+//                                      unsigned lda, unsigned ldb) {
+//   unsigned col = threadIdx.x;
+//   unsigned row = threadIdx.y;
+//   if (row < rows && col < cols) {
+//     B[col * ldb + row] = A[row * lda + col];
+//   }
+// }
+//
+// SpinalGPU note:
+// - Matrix v1 in this repo is still one-CTA and untiled, so this transpose uses only
+//   thread coordinates and direct global-memory accesses without shared-memory staging.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry matrix_transpose_f32(
+    .param .u32 a_ptr_param,
+    .param .u32 b_ptr_param,
+    .param .u32 rows_param,
+    .param .u32 cols_param,
+    .param .u32 lda_param,
+    .param .u32 ldb_param
+)
+{
+    .reg .u32 %r<15>;
+    .reg .f32 %f<1>;
+    .pred %p<2>;
+
+    // Setup
+    // Load source/destination pointers, bounds, and row-major element strides.
+    ld.param.u32 %r0, [a_ptr_param];
+    ld.param.u32 %r1, [b_ptr_param];
+    ld.param.u32 %r2, [rows_param];
+    ld.param.u32 %r3, [cols_param];
+    ld.param.u32 %r4, [lda_param];
+    ld.param.u32 %r5, [ldb_param];
+    // Map thread coordinates onto the source matrix location.
+    mov.u32 %r6, %tid.x;
+    mov.u32 %r7, %tid.y;
+
+    // Core
+    // Skip threads that lie outside the logical source matrix.
+    setp.lt.u32 %p0, %r7, %r2;
+    @!%p0 bra done;
+    setp.lt.u32 %p1, %r6, %r3;
+    @!%p1 bra done;
+
+    // Form the A[row, col] byte address.
+    mul.lo.u32 %r8, %r7, %r4;
+    add.u32 %r8, %r8, %r6;
+    shl.b32 %r9, %r8, 2;
+    add.u32 %r10, %r0, %r9;
+
+    // Form the transposed B[col, row] byte address.
+    mul.lo.u32 %r11, %r6, %r5;
+    add.u32 %r11, %r11, %r7;
+    shl.b32 %r12, %r11, 2;
+    add.u32 %r13, %r1, %r12;
+
+    // Load the source FP32 element and store it at the transposed destination.
+    ld.global.f32 %f0, [%r10];
+    st.global.f32 [%r13], %f0;
+
+    // Exit
+done:
+    ret;
+}

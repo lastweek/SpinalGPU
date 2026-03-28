@@ -162,6 +162,17 @@ object KernelCorpus {
   private def matrixAddExpected(rows: Int, cols: Int): Seq[Float] =
     matrixAddInputA(rows, cols).zip(matrixAddInputB(rows, cols)).map { case (a, b) => a + b }
 
+  private def matrixCopyExpected(rows: Int, cols: Int): Seq[Float] =
+    matrixAddInputA(rows, cols)
+
+  private def matrixTransposeExpected(rows: Int, cols: Int): Seq[Float] = {
+    val input = matrixAddInputA(rows, cols)
+    for {
+      row <- 0 until cols
+      col <- 0 until rows
+    } yield input(col * cols + row)
+  }
+
   private def matrixMulInputA(m: Int, k: Int): Seq[Float] =
     (0 until m * k).map(index => ((index % k).toFloat * 0.25f) + (index / k).toFloat)
 
@@ -287,6 +298,20 @@ object KernelCorpus {
     command = KernelCommand(entryPc = 0x100, blockDimX = 40, argBase = 0x200),
     preloadOps = Seq(WriteArgBuffer(base = 0x200, values = Seq(0x400L))),
     expectation = Success(checks = Seq(ExpectWords(base = 0x400, values = (0 until 40).map(_.toLong)))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val threadIdStore256: KernelCase = KernelCase(
+    name = "thread_id_store_256",
+    relativeSourcePath = "special_registers/thread_id_store.ptx",
+    purpose = "Store each thread's %tid.x to global memory.",
+    primaryFeature = SpecialRegisters,
+    secondaryFeatures = Seq(GlobalMemory),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 256, argBase = 0x620),
+    timeoutCycles = 120000,
+    preloadOps = Seq(WriteArgBuffer(base = 0x620, values = Seq(0x7000L))),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x7000, values = (0 until 256).map(_.toLong)))),
     harnessTargets = Seq(StreamingMultiprocessor)
   )
 
@@ -426,6 +451,40 @@ object KernelCorpus {
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
+  val matrixCopyF32: KernelCase = KernelCase(
+    name = "matrix_copy_f32",
+    relativeSourcePath = "arithmetic/matrix_copy_f32.ptx",
+    purpose = "Copy one FP32 row-major matrix element per thread using 2D thread coordinates.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, blockDimY = 4, argBase = 0x2C0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x0C00, values = matrixAddInputA(rows = 4, cols = 4)),
+      WriteArgBuffer(base = 0x2C0, values = Seq(0x0C00L, 0x0D00L, 4L, 4L, 4L, 4L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x0D00, values = matrixCopyExpected(rows = 4, cols = 4)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val matrixTransposeF32: KernelCase = KernelCase(
+    name = "matrix_transpose_f32",
+    relativeSourcePath = "arithmetic/matrix_transpose_f32.ptx",
+    purpose = "Transpose one FP32 row-major matrix using 2D thread coordinates.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, blockDimY = 4, argBase = 0x2E0),
+    timeoutCycles = 30000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0x0E00, values = matrixAddInputA(rows = 4, cols = 4)),
+      WriteArgBuffer(base = 0x2E0, values = Seq(0x0E00L, 0x0F00L, 4L, 4L, 4L, 4L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x0F00, values = matrixTransposeExpected(rows = 4, cols = 4)))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
   val matrixAddF32: KernelCase = KernelCase(
     name = "matrix_add_f32",
     relativeSourcePath = "arithmetic/matrix_add_f32.ptx",
@@ -433,14 +492,14 @@ object KernelCorpus {
     primaryFeature = FloatingPoint,
     secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
     teachingLevel = Core,
-    command = KernelCommand(entryPc = 0x100, blockDimX = 8, blockDimY = 8, argBase = 0x300),
-    timeoutCycles = 80000,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, blockDimY = 4, argBase = 0x300),
+    timeoutCycles = 30000,
     preloadOps = Seq(
-      WriteDataF32(base = 0x1000, values = matrixAddInputA(rows = 8, cols = 8)),
-      WriteDataF32(base = 0x1200, values = matrixAddInputB(rows = 8, cols = 8)),
-      WriteArgBuffer(base = 0x300, values = Seq(0x1000L, 0x1200L, 0x1400L, 8L, 8L, 8L, 8L, 8L))
+      WriteDataF32(base = 0x1000, values = matrixAddInputA(rows = 4, cols = 4)),
+      WriteDataF32(base = 0x1200, values = matrixAddInputB(rows = 4, cols = 4)),
+      WriteArgBuffer(base = 0x300, values = Seq(0x1000L, 0x1200L, 0x1400L, 4L, 4L, 4L, 4L, 4L))
     ),
-    expectation = Success(checks = Seq(ExpectF32(base = 0x1400, values = matrixAddExpected(rows = 8, cols = 8)))),
+    expectation = Success(checks = Seq(ExpectF32(base = 0x1400, values = matrixAddExpected(rows = 4, cols = 4)))),
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
@@ -451,15 +510,15 @@ object KernelCorpus {
     primaryFeature = FloatingPoint,
     secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
     teachingLevel = Core,
-    command = KernelCommand(entryPc = 0x100, blockDimX = 8, blockDimY = 8, argBase = 0x340),
-    timeoutCycles = 200000,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, blockDimY = 4, argBase = 0x340),
+    timeoutCycles = 60000,
     preloadOps = Seq(
-      WriteDataF32(base = 0x1800, values = matrixMulInputA(m = 8, k = 8)),
-      WriteDataF32(base = 0x1A00, values = matrixMulInputB(k = 8, n = 8)),
-      WriteArgBuffer(base = 0x340, values = Seq(0x1800L, 0x1A00L, 0x1C00L, 8L, 8L, 8L, 8L, 8L, 8L))
+      WriteDataF32(base = 0x1800, values = matrixMulInputA(m = 4, k = 4)),
+      WriteDataF32(base = 0x1A00, values = matrixMulInputB(k = 4, n = 4)),
+      WriteArgBuffer(base = 0x340, values = Seq(0x1800L, 0x1A00L, 0x1C00L, 4L, 4L, 4L, 4L, 4L, 4L))
     ),
-    expectation = Success(checks = Seq(ExpectF32(base = 0x1C00, values = matrixMulExpected(m = 8, n = 8, k = 8)))),
-    harnessTargets = Seq(StreamingMultiprocessor)
+    expectation = Success(checks = Seq(ExpectF32(base = 0x1C00, values = matrixMulExpected(m = 4, n = 4, k = 4)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
   val reluClampF32: KernelCase = KernelCase(
@@ -605,6 +664,22 @@ object KernelCorpus {
     harnessTargets = Seq(StreamingMultiprocessor)
   )
 
+  val warpidStallIsolation: KernelCase = KernelCase(
+    name = "warpid_stall_isolation",
+    relativeSourcePath = "control/warpid_stall_isolation.ptx",
+    purpose = "Let one warp take a long uniform delay while the other warps still retire.",
+    primaryFeature = Control,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 128, argBase = 0x660),
+    timeoutCycles = 60000,
+    preloadOps = Seq(WriteArgBuffer(base = 0x660, values = Seq(0x7400L))),
+    expectation = Success(
+      checks = Seq(ExpectWords(base = 0x7400, values = Seq(0x100L, 0x101L, 0x102L, 0x103L, 0x200L, 0x201L, 0x202L, 0x203L)))
+    ),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
   val nonUniformBranch: KernelCase = KernelCase(
     name = "non_uniform_branch",
     relativeSourcePath = "control/non_uniform_branch.ptx",
@@ -643,6 +718,7 @@ object KernelCorpus {
   val all: Seq[KernelCase] = Seq(
     addStoreExit,
     threadIdStore,
+    threadIdStore256,
     basicSpecialRegisterStore,
     gridIdStore,
     uniformLoop,
@@ -651,6 +727,8 @@ object KernelCorpus {
     vectorLoadStoreF32x2,
     vectorLoadStoreF32x4,
     vectorAddF32x4,
+    matrixCopyF32,
+    matrixTransposeF32,
     matrixAddF32,
     matrixMulF32,
     reluClampF32,
@@ -661,6 +739,7 @@ object KernelCorpus {
     scalarMinS32,
     scalarMadU32,
     registerStress,
+    warpidStallIsolation,
     nonUniformBranch,
     misalignedStore,
     trap

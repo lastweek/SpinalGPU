@@ -1,0 +1,84 @@
+// Purpose: Let one warp take a long uniform delay while the other warps still retire.
+// Primary feature: control
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each warp reads %warpid and immediately stores a start marker to a warp-indexed slot.
+// - Warp 0 then enters a long uniform countdown loop while warps 1-3 skip directly to the
+//   final completion store.
+// - All warps eventually write a completion marker so the harness can prove that other
+//   partitions made forward progress before the delayed warp retired.
+//
+// Where this fits:
+// - This is a sub-SM isolation kernel for the four-partition SM model.
+// - It turns one warp into a deliberately slow control-path workload while keeping the
+//   other warps simple enough that their completion order is easy to observe.
+//
+// Key model details:
+// - %warpid is uniform across all active lanes in a warp, so the branch on warp ID stays
+//   legal in this repo's current "uniform branches only" SIMT model.
+// - All lanes in a warp write the same markers to the same addresses, which is acceptable
+//   here because the harness only cares about warp-level progress, not per-lane payloads.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void warpid_stall_isolation(unsigned* out) {
+//   unsigned warp = threadIdx.x / warpSize;
+//   out[warp] = 0x100u + warp;
+//   if (warp == 0) {
+//     unsigned countdown = 128u;
+//     while (countdown != 0u) {
+//       countdown--;
+//     }
+//   }
+//   out[4 + warp] = 0x200u + warp;
+// }
+//
+// SpinalGPU note:
+// - The real teaching goal is not the arithmetic result; it is proving that a slow warp
+//   in one partition does not globally block the other sub-SMs.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry warpid_stall_isolation(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<10>;
+    .pred %p<2>;
+
+    // Setup
+    // Load the output pointer and capture the current warp ID.
+    ld.param.u32 %r0, [out_ptr_param];
+    mov.u32 %r1, %warpid;
+    // Store a start marker in out[warpid].
+    shl.b32 %r2, %r1, 2;
+    add.u32 %r3, %r0, %r2;
+    add.u32 %r4, %r1, 256;
+    st.global.u32 [%r3], %r4;
+    // Warp 0 takes the slow path; all other warps skip directly to the completion store.
+    setp.eq.u32 %p0, %r1, 0;
+
+    // Core
+    @%p0 bra slow_path;
+    bra done_store;
+
+slow_path:
+    // Keep warp 0 busy long enough for the other warps to retire first.
+    mov.u32 %r5, 128;
+slow_loop:
+    add.u32 %r5, %r5, -1;
+    setp.ne.u32 %p1, %r5, 0;
+    @%p1 bra slow_loop;
+
+done_store:
+    // Store the completion marker in out[4 + warpid].
+    add.u32 %r6, %r1, 4;
+    shl.b32 %r7, %r6, 2;
+    add.u32 %r8, %r0, %r7;
+    add.u32 %r9, %r1, 512;
+    st.global.u32 [%r8], %r9;
+
+    // Exit
+    ret;
+}

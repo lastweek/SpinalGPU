@@ -15,6 +15,7 @@ class L1DataSharedMemory(config: SmConfig) extends Component {
     val sharedMemRsp = slave(Stream(SharedMemRsp(config)))
     val memoryReq = master(Stream(GlobalMemBurstReq(config)))
     val memoryRsp = slave(Stream(GlobalMemBurstRsp(config)))
+    val idle = out Bool()
   }
 
   private val sharedPendingSource = Reg(UInt(sourceIdWidth bits)) init (0)
@@ -200,4 +201,6 @@ class L1DataSharedMemory(config: SmConfig) extends Component {
   when(io.memoryRsp.fire) {
     externalWaitingForRsp := False
   }
+
+  io.idle := !sharedWaitingForRsp && !externalWaitingForRsp && !io.sharedMemReq.valid && !io.memoryReq.valid
 }

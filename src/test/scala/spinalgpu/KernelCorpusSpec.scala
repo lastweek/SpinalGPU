@@ -12,7 +12,7 @@ class KernelCorpusSpec extends AnyFunSuite with Matchers {
   private def trimmedNonEmptyLines(path: Path): Seq[String] =
     Files.readAllLines(path).asScala.map(_.trim).filter(_.nonEmpty).toSeq
 
-  test("kernel corpus references every .ptx file exactly once and generated binaries exist") {
+  test("kernel corpus covers every .ptx file and generated binaries exist") {
     ExecutionTestUtils.ensureKernelCorpusBuilt()
 
     val corpusPaths = KernelCorpus.all.map(_.sourcePath.normalize()).toSet

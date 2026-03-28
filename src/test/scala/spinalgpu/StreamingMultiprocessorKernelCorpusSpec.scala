@@ -18,6 +18,9 @@ class AddStoreExitStreamingMultiprocessorSpec
 class ThreadIdStoreStreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.threadIdStore)
 
+class ThreadIdStore256StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.threadIdStore256)
+
 class BasicSpecialRegisterStoreStreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.basicSpecialRegisterStore)
 
@@ -41,6 +44,12 @@ class VectorLoadStoreF32x4StreamingMultiprocessorSpec
 
 class VectorAddF32x4StreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddF32x4)
+
+class MatrixCopyF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixCopyF32)
+
+class MatrixTransposeF32StreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixTransposeF32)
 
 class MatrixAddF32StreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixAddF32)
@@ -71,6 +80,9 @@ class ScalarMadU32StreamingMultiprocessorSpec
 
 class RegisterStressStreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.registerStress)
+
+class WarpidStallIsolationStreamingMultiprocessorSpec
+    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.warpidStallIsolation)
 
 class NonUniformBranchStreamingMultiprocessorSpec
     extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.nonUniformBranch)

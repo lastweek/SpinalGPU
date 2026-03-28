@@ -11,6 +11,7 @@ class L1InstructionCache(config: SmConfig) extends Component {
     val subSmRsp = Vec(master(Stream(FetchMemRsp(config))), config.subSmCount)
     val memoryReq = master(Stream(FetchMemReq(config)))
     val memoryRsp = slave(Stream(FetchMemRsp(config)))
+    val idle = out Bool()
   }
 
   private val pendingSource = Reg(UInt(sourceIdWidth bits)) init (0)
@@ -91,4 +92,6 @@ class L1InstructionCache(config: SmConfig) extends Component {
   when(io.memoryRsp.fire) {
     waitingForRsp := False
   }
+
+  io.idle := !waitingForRsp && !io.memoryReq.valid
 }

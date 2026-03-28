@@ -55,8 +55,8 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `SM11` | `StreamingMultiprocessorSimSpec`: `trap` kernel traps and latches fault status |
 | `SM12` | `StreamingMultiprocessorSimSpec`: `basic_special_register_store` completes and writes expected builtin values |
 | `SM13` | `StreamingMultiprocessorSimSpec`: `grid_id_store` completes and writes the initial `%gridid` value |
-| `SM14` | `StreamingMultiprocessorSimSpec`: `matrix_add_f32` completes and writes expected FP32 matrix sums |
-| `SM15` | `StreamingMultiprocessorSimSpec`: `matrix_mul_f32` completes and writes expected FP32 matrix products |
+| `SM14` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_add_f32` completes and writes expected FP32 matrix sums |
+| `SM15` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_mul_f32` completes and writes expected FP32 matrix products |
 | `SM16` | `StreamingMultiprocessorKernelCorpusSpec`: `relu_clamp_f32` completes and writes expected branchless activation outputs |
 | `SM17` | `StreamingMultiprocessorKernelCorpusSpec`: `linear_bias_relu_f32` completes and writes expected dense-layer outputs |
 | `SM18` | `StreamingMultiprocessorKernelCorpusSpec`: `hinge_step_f32` completes and writes expected hinge-loss terms |
@@ -64,12 +64,15 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `SM20` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_load_store_f32x2` completes and round-trips FP32 float2 tuples |
 | `SM21` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_load_store_f32x4` completes and round-trips FP32 float4 tuples |
 | `SM22` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_add_f32x4` completes and writes expected float4 sums |
+| `SM23` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_copy_f32` completes and writes expected FP32 matrix copies |
+| `SM24` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_transpose_f32` completes and writes expected FP32 matrix transposes |
 | `GT1` | `GpuTopSimSpec`: `GpuTop` exposes idle AXI memory and AXI-Lite control boundaries |
 | `GT2` | `ExecutionFrontendSimSpec`: `grid_id_store` increments across successive `GpuTop` launches |
 | `GT3` | `ExecutionFrontendSimSpec`: `matrix_add_f32` executes through `GpuTop` and writes expected FP32 output |
 | `GT4` | `ExecutionFrontendSimSpec`: `matrix_mul_f32` executes through `GpuTop` and writes expected FP32 output |
 | `GT5` | `ExecutionFrontendSimSpec`: `linear_bias_relu_f32` executes through `GpuTop` and writes expected dense-layer output |
 | `GT6` | `ExecutionFrontendSimSpec`: `vector_add_f32x4` executes through `GpuTop` and writes expected float4 output |
+| `GT7` | `ExecutionFrontendSimSpec`: `matrix_copy_f32` executes through `GpuTop` and writes expected FP32 output |
 
 ## Compatibility Summary
 
@@ -82,6 +85,18 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | Instruction surface | `Partial` | `Direct` | Integer, control, FP32 CUDA-core ops, PTX vector `.v2/.v4 .f32` tuple movement, and narrow `.u64` data movement are implemented for the documented subset |
 | Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only; aligned 32-bit words, FP32 global traffic, coalesced bursts, PTX vector tuple loads/stores lowered element-wise, plus lowered `st.global.u64` |
 | Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, FP beyond the narrow `.f32` subset, packed/vector ALU beyond tuple movement, SFU, tensor, sync, atomics, calls, and broad compiler-generated PTX remain out of scope |
+
+## Matrix V1 Note
+
+Current matrix support in SpinalGPU should be read as **matrix v1**:
+
+- one CTA per launch
+- untiled row-major kernels
+- inputs and outputs in global memory
+- scalar CUDA-core FP32 execution under the hood
+- no shared-memory tiling, tensor instructions, or multi-CTA `blockIdx` decomposition yet
+
+The current teaching ladder for that matrix v1 path is `matrix_copy_f32`, `matrix_transpose_f32`, `matrix_add_f32`, and `matrix_mul_f32`.
 
 ## Execution And Launch Model
 

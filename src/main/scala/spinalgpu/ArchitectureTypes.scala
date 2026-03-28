@@ -49,6 +49,12 @@ case class WarpBindingInfo(config: SmConfig) extends Bundle {
   val localSlotId = UInt(config.localSlotIdWidth bits)
 }
 
+case class LocalSlotContextView(config: SmConfig) extends Bundle {
+  val occupied = Bool()
+  val warpId = UInt(config.warpIdWidth bits)
+  val context = WarpContext(config)
+}
+
 case class WarpScheduleReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val context = WarpContext(config)
@@ -64,6 +70,15 @@ case class SubSmScheduleReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val localSlotId = UInt(config.localSlotIdWidth bits)
   val context = WarpContext(config)
+}
+
+case class SubSmStatus(config: SmConfig) extends Bundle {
+  val idle = Bool()
+  val engineState = UInt(3 bits)
+  val trapValid = Bool()
+  val trapInfo = TrapInfo(config)
+  val selectedWarpId = UInt(config.warpIdWidth bits)
+  val selectedPc = UInt(config.addressWidth bits)
 }
 
 case class FetchReq(config: SmConfig) extends Bundle {
@@ -117,6 +132,13 @@ case class DecodedInstruction(config: SmConfig) extends Bundle {
 
 case class WritebackPacket(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
+  val rd = UInt(config.registerAddressWidth bits)
+  val writeMask = Bits(config.warpSize bits)
+  val data = Vec(Bits(config.dataWidth bits), config.warpSize)
+}
+
+case class LocalRegisterWriteback(config: SmConfig) extends Bundle {
+  val slotId = UInt(config.localSlotIdWidth bits)
   val rd = UInt(config.registerAddressWidth bits)
   val writeMask = Bits(config.warpSize bits)
   val data = Vec(Bits(config.dataWidth bits), config.warpSize)
@@ -187,6 +209,19 @@ case class TensorRsp(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val completed = Bool()
   val result = Vec(Bits(config.dataWidth bits), config.warpSize)
+}
+
+case class PendingWarpOp(config: SmConfig) extends Bundle {
+  val valid = Bool()
+  val warpId = UInt(config.warpIdWidth bits)
+  val localSlotId = UInt(config.localSlotIdWidth bits)
+  val pc = UInt(config.addressWidth bits)
+  val nextPc = UInt(config.addressWidth bits)
+  val writesRd = Bool()
+  val rd = UInt(config.registerAddressWidth bits)
+  val isLoad = Bool()
+  val activeMask = Bits(config.warpSize bits)
+  val decoded = DecodedInstruction(config)
 }
 
 case class SharedMemReq(config: SmConfig) extends Bundle {

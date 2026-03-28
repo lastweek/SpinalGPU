@@ -15,6 +15,7 @@ class ExternalMemoryArbiter(config: SmConfig) extends Component {
     val lsuRsp = master(Stream(GlobalMemBurstRsp(config)))
     val memoryReq = master(Stream(ExternalMemBurstReq(config)))
     val memoryRsp = slave(Stream(ExternalMemBurstRsp(config)))
+    val idle = out Bool()
   }
 
   private val pendingSource = Reg(Source()) init (Source.FETCH)
@@ -68,4 +69,6 @@ class ExternalMemoryArbiter(config: SmConfig) extends Component {
   when(io.memoryRsp.fire) {
     waitingForRsp := False
   }
+
+  io.idle := !waitingForRsp && !io.memoryReq.valid
 }

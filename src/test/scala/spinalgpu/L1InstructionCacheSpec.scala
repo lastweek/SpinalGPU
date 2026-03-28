@@ -51,6 +51,7 @@ class L1InstructionCacheSpec extends AnyFunSuite with Matchers {
       dut.io.memoryReq.ready #= true
 
       dut.clockDomain.waitSampling()
+      dut.io.idle.toBoolean shouldBe false
       waitUntil() { dut.io.memoryReq.valid.toBoolean }
       dut.io.memoryReq.valid.toBoolean shouldBe true
       dut.io.memoryReq.payload.warpId.toBigInt shouldBe BigInt(1)
@@ -73,9 +74,11 @@ class L1InstructionCacheSpec extends AnyFunSuite with Matchers {
       dut.clockDomain.waitSampling()
       dut.io.memoryRsp.valid #= false
       dut.io.subSmRsp(0).ready #= false
+      dut.io.idle.toBoolean shouldBe false
 
       dut.io.memoryReq.ready #= true
       dut.clockDomain.waitSampling()
+      dut.io.idle.toBoolean shouldBe false
       waitUntil() { dut.io.memoryReq.valid.toBoolean }
       dut.io.memoryReq.valid.toBoolean shouldBe true
       dut.io.memoryReq.payload.warpId.toBigInt shouldBe BigInt(2)

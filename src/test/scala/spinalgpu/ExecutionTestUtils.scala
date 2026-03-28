@@ -43,7 +43,7 @@ object ExecutionTestUtils {
 
   /** Loads a generated machine-code file and auto-builds the corpus first if the requested `.bin` is missing. */
   def loadBinaryFile(memory: AxiMemorySim, baseAddress: Long, path: Path, byteCount: Int): Unit = {
-    if (path.normalize.startsWith(KernelCorpus.outputRoot) && !Files.exists(path)) {
+    if (path.normalize.startsWith(KernelCorpus.outputRoot) && (!kernelCorpusReady || !Files.exists(path))) {
       ensureKernelCorpusBuilt()
     }
     loadBinary(memory, baseAddress, KernelBinaryIO.readWords(path), byteCount)

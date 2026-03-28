@@ -11,6 +11,7 @@ This repository models one educational SpinalGPU SM with a GH100-style partition
   - local register-file slice
   - local instruction fetch frontend through an `L0InstructionCache`
   - local CUDA, LSU, SFU, and tensor blocks
+  - local `PendingWarpOp` tracking plus typed `SubSmStatus`
 - SM-level resources are shared across the 4 partitions:
   - `WarpStateTable`
   - `WarpBinder`
@@ -54,8 +55,11 @@ This repository models one educational SpinalGPU SM with a GH100-style partition
 | `SmAdmissionController` | Validates launches and initializes architectural warp state | One CTA at a time |
 | `WarpStateTable` | Holds architectural warp context for all resident warps | Global runtime state only |
 | `WarpBinder` | Binds unbound ready warps into sub-SM local slots | Round-robin across sub-SMs and warps |
-| `SubSmPartition` | Local warp scheduling, fetch, decode, issue, and writeback | One warp issue slot per partition |
+| `SubSmPartition` | Local warp scheduling, fetch, decode, issue, and writeback | One warp issue slot per partition with typed status and latched pending-op completion |
+| `LocalWarpSlotTable` | Tracks local slot occupancy and bound warp IDs | Handles free-slot lookup and clear/rebind state |
+| `LocalWarpScheduler` | Chooses the next ready local slot | Round-robin from a rotating local base |
 | `WarpRegisterFile` | Holds per-thread registers for bound local warp slots | One local slice per sub-SM |
+| `SpecialRegisterReadUnit` | Synthesizes `%tid`, `%ntid`, `%gridid`, and similar reads | Dedicated special-register datapath inside each partition |
 | `L0InstructionCache` | Placeholder local instruction-cache stage | Pass-through structural cache level |
 | `L1InstructionCache` | Shared instruction-side arbitration point | One outstanding fetch at a time |
 | `CudaCoreArray` | Local CUDA arithmetic path inside each partition | Full-warp issue path at the partition boundary |

@@ -75,6 +75,7 @@ class L1DataSharedMemorySpec extends AnyFunSuite with Matchers {
       dut.io.sharedMemReq.ready #= true
 
       dut.clockDomain.waitSampling()
+      dut.io.idle.toBoolean shouldBe false
       waitUntil() { dut.io.sharedMemReq.valid.toBoolean }
       dut.io.sharedMemReq.valid.toBoolean shouldBe true
       dut.io.sharedMemReq.payload.warpId.toBigInt shouldBe BigInt(3)
@@ -96,6 +97,7 @@ class L1DataSharedMemorySpec extends AnyFunSuite with Matchers {
       dut.clockDomain.waitSampling()
       dut.io.sharedMemRsp.valid #= false
       dut.io.sharedRsp(3).ready #= false
+      dut.io.idle.toBoolean shouldBe true
 
       dut.io.externalReq(1).valid #= true
       dut.io.externalReq(1).payload.warpId #= 2
@@ -106,6 +108,7 @@ class L1DataSharedMemorySpec extends AnyFunSuite with Matchers {
       dut.io.memoryReq.ready #= true
 
       dut.clockDomain.waitSampling()
+      dut.io.idle.toBoolean shouldBe false
       waitUntil() { dut.io.memoryReq.valid.toBoolean }
       dut.io.memoryReq.valid.toBoolean shouldBe true
       dut.io.memoryReq.payload.warpId.toBigInt shouldBe BigInt(2)
@@ -127,6 +130,10 @@ class L1DataSharedMemorySpec extends AnyFunSuite with Matchers {
       dut.io.externalRsp(1).valid.toBoolean shouldBe true
       dut.io.externalRsp(1).payload.readData(0).toBigInt shouldBe BigInt(0xAA)
       dut.io.externalRsp(1).payload.readData(1).toBigInt shouldBe BigInt(0xBB)
+      dut.clockDomain.waitSampling()
+      dut.io.memoryRsp.valid #= false
+      dut.io.externalRsp(1).ready #= false
+      dut.io.idle.toBoolean shouldBe true
     }
   }
 }

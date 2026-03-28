@@ -100,6 +100,8 @@ st.global.f32 [%rC], %f2;
 
 Typical examples:
 
+- `arithmetic/matrix_copy_f32.ptx`
+- `arithmetic/matrix_transpose_f32.ptx`
 - `arithmetic/matrix_add_f32.ptx`
 - `arithmetic/matrix_mul_f32.ptx`
 
@@ -108,6 +110,14 @@ Practical meaning:
 - threads are mapped onto `row/col` positions with `%tid.x` and `%tid.y`
 - arithmetic is still mostly scalar PTX
 - the “matrix” part comes from the indexing pattern and loop structure, not from a separate PTX instruction family
+
+Current matrix v1 in this repo means:
+
+- one CTA per launch
+- untiled row-major kernels
+- inputs and outputs in global memory
+- scalar CUDA-core FP32 execution under the hood
+- no shared-memory tiling and no multi-CTA `blockIdx` decomposition yet
 
 ## Repo-Specific Vector Rule
 

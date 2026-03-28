@@ -10,6 +10,33 @@ import spinalgpu.toolchain.KernelCorpus
 abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
   protected val config: SmConfig = SmConfig.default
 
+  protected def waitForGpuTopDoneClear(dut: GpuTop, timeoutCycles: Int, label: String): Unit = {
+    var cycles = 0
+    while (dut.io.debugExecutionStatus.done.toBoolean && cycles < timeoutCycles) {
+      dut.coreClockDomain.waitSampling()
+      cycles += 1
+    }
+
+    assert(
+      !dut.io.debugExecutionStatus.done.toBoolean,
+      s"$label did not clear the done flag after $cycles cycles; " +
+        s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
+        s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
+        s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
+        f"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
+    )
+  }
+
+  protected def clearDoneAndWaitForGpuTopReady(
+      hostControl: AxiLite4Driver,
+      dut: GpuTop,
+      timeoutCycles: Int
+  ): Unit = {
+    ExecutionTestUtils.clearDone(hostControl)
+    waitForGpuTopDoneClear(dut, timeoutCycles, "GpuTop clearDone")
+    dut.coreClockDomain.waitSampling(4)
+  }
+
   protected def waitForGpuTopCompletionSignal(
       hostControl: AxiLite4Driver,
       dut: GpuTop,
@@ -77,6 +104,12 @@ class MatrixAddF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   }
 }
 
+class MatrixCopyF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  test("matrix_copy_f32 executes through GpuTop") {
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixCopyF32, config)
+  }
+}
+
 class VectorAddF32x4GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("vector_add_f32x4 executes through GpuTop") {
     KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.vectorAddF32x4, config)
@@ -85,7 +118,7 @@ class VectorAddF32x4GpuTopSpec extends ExecutionFrontendGpuTopSpec {
 
 class MatrixMulF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("matrix_mul_f32 executes through GpuTop") {
-    runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.matrixMulF32)
+    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixMulF32, config)
   }
 }
 
@@ -110,33 +143,10 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
       memory.start()
       hostControl.reset()
 
-      def waitForExecutionCompleteSignal(timeoutCycles: Int): (Boolean, BigInt, BigInt) = {
-        var cycles = 0
-        while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < timeoutCycles) {
-          dut.coreClockDomain.waitSampling()
-          cycles += 1
-        }
-
-        assert(
-          dut.io.debugExecutionStatus.done.toBoolean,
-          s"${kernel.name} did not complete after $cycles cycles; " +
-            s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
-            s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
-            s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
-            s"faultPc=0x${dut.io.debugExecutionStatus.faultPc.toBigInt.toString(16)}"
-        )
-
-        val status = ExecutionTestUtils.readExecutionStatus(hostControl)
-        val fault = ((status >> 2) & 1) == 1
-        val faultCode = ExecutionTestUtils.readFaultCode(hostControl)
-        val faultPc = ExecutionTestUtils.readFaultPc(hostControl)
-        (fault, faultCode, faultPc)
-      }
-
       KernelCorpusTestUtils.loadKernelCase(memory, kernel, config.byteCount)
 
       ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
-      val (firstFault, firstFaultCode, firstFaultPc) = waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      val (firstFault, firstFaultCode, firstFaultPc) = waitForGpuTopCompletionSignal(hostControl, dut, kernel)
       dut.coreClockDomain.waitSampling(8)
       withClue(f"faultCode=0x${firstFaultCode.toString(16)} faultPc=0x${firstFaultPc.toString(16)} ") {
         firstFault shouldBe false
@@ -144,11 +154,10 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
       ExecutionTestUtils.readWord(memory, 0xA00L, config.byteCount) shouldBe BigInt(0)
       ExecutionTestUtils.readWord(memory, 0xA04L, config.byteCount) shouldBe BigInt(0)
 
-      ExecutionTestUtils.clearDone(hostControl)
-      dut.coreClockDomain.waitSampling(4)
+      clearDoneAndWaitForGpuTopReady(hostControl, dut, timeoutCycles = 128)
 
       ExecutionTestUtils.submitKernelCommand(hostControl, kernel.command)
-      val (secondFault, secondFaultCode, secondFaultPc) = waitForExecutionCompleteSignal(kernel.timeoutCycles)
+      val (secondFault, secondFaultCode, secondFaultPc) = waitForGpuTopCompletionSignal(hostControl, dut, kernel)
       dut.coreClockDomain.waitSampling(8)
       withClue(f"faultCode=0x${secondFaultCode.toString(16)} faultPc=0x${secondFaultPc.toString(16)} ") {
         secondFault shouldBe false
