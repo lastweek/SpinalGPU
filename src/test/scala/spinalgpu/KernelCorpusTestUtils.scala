@@ -16,6 +16,39 @@ import spinalgpu.toolchain.KernelCorpus._
   */
 object KernelCorpusTestUtils {
   private final case class FaultObservation(fault: Boolean, code: BigInt, faultPc: BigInt)
+  private object CompiledHarnessCache {
+    lazy val defaultStreamingMultiprocessor: SimCompiled[StreamingMultiprocessor] = {
+      println("[progress][compile][sm] compiling default StreamingMultiprocessor once for kernel-corpus execution tests")
+      SimConfig.withVerilator.compile(new StreamingMultiprocessor(SmConfig.default))
+    }
+
+    lazy val defaultGpuTop: SimCompiled[GpuTop] = {
+      println("[progress][compile][gputop] compiling default GpuTop once for top-level corpus execution tests")
+      SimConfig.withVerilator.compile(new GpuTop(SmConfig.default))
+    }
+  }
+
+  def compiledStreamingMultiprocessor(config: SmConfig = SmConfig.default): SimCompiled[StreamingMultiprocessor] =
+    if (config == SmConfig.default) {
+      CompiledHarnessCache.defaultStreamingMultiprocessor
+    } else {
+      println("[progress][compile][sm] compiling ad-hoc StreamingMultiprocessor for non-default config")
+      SimConfig.withVerilator.compile(new StreamingMultiprocessor(config))
+    }
+
+  def compiledGpuTop(config: SmConfig = SmConfig.default): SimCompiled[GpuTop] =
+    if (config == SmConfig.default) {
+      CompiledHarnessCache.defaultGpuTop
+    } else {
+      println("[progress][compile][gputop] compiling ad-hoc GpuTop for non-default config")
+      SimConfig.withVerilator.compile(new GpuTop(config))
+    }
+
+  private def progressLabel(harness: String, cases: Seq[KernelCase], kernel: KernelCase): String = {
+    val index = cases.indexWhere(_.name == kernel.name)
+    val ordinal = if (index >= 0) s"${index + 1}/${cases.size}" else s"?/${cases.size}"
+    s"[progress][$harness $ordinal] ${kernel.name}"
+  }
 
   private def waitForGpuTopCompletion(
       dut: GpuTop,
@@ -132,7 +165,9 @@ object KernelCorpusTestUtils {
       s"${kernel.name} does not target the StreamingMultiprocessor harness"
     )
 
-    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+    val label = progressLabel("sm", KernelCorpus.streamingMultiprocessorCases, kernel)
+    println(s"$label start")
+    compiledStreamingMultiprocessor(config).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
       dut.io.command.start #= false
@@ -186,13 +221,16 @@ object KernelCorpusTestUtils {
 
       memory.stop()
     }
+    println(s"$label done")
   }
 
   /** Runs one corpus case against the top-level GpuTop harness. */
   def runGpuTopKernelCase(kernel: KernelCase, config: SmConfig = SmConfig.default): Unit = {
     assert(kernel.harnessTargets.contains(HarnessTarget.GpuTop), s"${kernel.name} does not target the GpuTop harness")
 
-    SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
+    val label = progressLabel("gputop", KernelCorpus.gpuTopCases, kernel)
+    println(s"$label start")
+    compiledGpuTop(config).doSim { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
       ExecutionTestUtils.idleAxiLite(dut.io.hostControl)
       dut.coreClockDomain.assertReset()
@@ -217,5 +255,6 @@ object KernelCorpusTestUtils {
 
       memory.stop()
     }
+    println(s"$label done")
   }
 }

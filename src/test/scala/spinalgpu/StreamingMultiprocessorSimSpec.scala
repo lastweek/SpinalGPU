@@ -8,6 +8,14 @@ import spinal.lib.bus.amba4.axi.sim._
 abstract class StreamingMultiprocessorSingleSimSpec extends AnyFunSuite with Matchers {
   protected val config: SmConfig = SmConfig.default
 
+  protected def withStreamingMultiprocessorSimulation(label: String)(body: StreamingMultiprocessor => Unit): Unit = {
+    println(s"[progress][sm-integration] $label start")
+    KernelCorpusTestUtils.compiledStreamingMultiprocessor(config).doSim { dut =>
+      body(dut)
+    }
+    println(s"[progress][sm-integration] $label done")
+  }
+
   protected def pulseStart(dut: StreamingMultiprocessor): Unit = {
     dut.io.command.start #= true
     dut.clockDomain.waitSampling()
@@ -38,7 +46,7 @@ abstract class StreamingMultiprocessorSingleSimSpec extends AnyFunSuite with Mat
 
 class StreamingMultiprocessorAdmissionSpec extends StreamingMultiprocessorSingleSimSpec {
   test("SM admission controller initializes warp contexts and schedules multiple warps") {
-    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+    withStreamingMultiprocessorSimulation("admission") { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
       dut.io.command.start #= false
@@ -91,7 +99,7 @@ class StreamingMultiprocessorAdmissionSpec extends StreamingMultiprocessorSingle
 
 class StreamingMultiprocessorIllegalOpcodeSpec extends StreamingMultiprocessorSingleSimSpec {
   test("illegal opcode traps and latches fault status") {
-    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+    withStreamingMultiprocessorSimulation("illegal-opcode") { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
       dut.io.command.start #= false
@@ -131,7 +139,7 @@ class StreamingMultiprocessorIllegalOpcodeSpec extends StreamingMultiprocessorSi
 
 class StreamingMultiprocessorMisalignedFetchSpec extends StreamingMultiprocessorSingleSimSpec {
   test("misaligned fetch traps and latches fault status") {
-    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+    withStreamingMultiprocessorSimulation("misaligned-fetch") { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
       dut.io.command.start #= false

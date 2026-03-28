@@ -27,7 +27,8 @@ abstract class StreamingMultiprocessorKernelIntegrationSpec extends StreamingMul
       kernel: KernelCorpus.KernelCase,
       memoryConfig: AxiMemorySimConfig = AxiMemorySimConfig()
   )(body: (StreamingMultiprocessor, AxiMemorySim) => Unit): Unit = {
-    SimConfig.withVerilator.compile(new StreamingMultiprocessor(config)).doSim { dut =>
+    println(s"[progress][sm-integration] ${kernel.name} integration start")
+    KernelCorpusTestUtils.compiledStreamingMultiprocessor(config).doSim { dut =>
       dut.clockDomain.forkStimulus(period = 10)
       dut.clockDomain.assertReset()
       configureKernelCommand(dut, kernel)
@@ -43,6 +44,7 @@ abstract class StreamingMultiprocessorKernelIntegrationSpec extends StreamingMul
 
       memory.stop()
     }
+    println(s"[progress][sm-integration] ${kernel.name} integration done")
   }
 
   protected def assertKernelSuccess(memory: AxiMemorySim, kernel: KernelCorpus.KernelCase): Unit =

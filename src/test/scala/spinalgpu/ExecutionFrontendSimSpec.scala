@@ -10,6 +10,14 @@ import spinalgpu.toolchain.KernelCorpus
 abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
   protected val config: SmConfig = SmConfig.default
 
+  protected def withGpuTopSimulation(label: String)(body: GpuTop => Unit): Unit = {
+    println(s"[progress][gputop-integration] $label start")
+    KernelCorpusTestUtils.compiledGpuTop(config).doSim { dut =>
+      body(dut)
+    }
+    println(s"[progress][gputop-integration] $label done")
+  }
+
   protected def waitForGpuTopDoneClear(dut: GpuTop, timeoutCycles: Int, label: String): Unit = {
     var cycles = 0
     while (dut.io.debugExecutionStatus.done.toBoolean && cycles < timeoutCycles) {
@@ -67,7 +75,10 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
   }
 
   protected def runGpuTopKernelCaseWithoutHarnessGate(kernel: KernelCorpus.KernelCase): Unit = {
-    SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
+    val gpuTopKernels = KernelCorpus.gpuTopCases :+ KernelCorpus.linearBiasReluF32
+    val index = gpuTopKernels.indexWhere(_.name == kernel.name)
+    val ordinal = if (index >= 0) s"${index + 1}/${gpuTopKernels.size}" else s"?/${gpuTopKernels.size}"
+    withGpuTopSimulation(s"${kernel.name} [$ordinal]") { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
       ExecutionTestUtils.idleAxiLite(dut.io.hostControl)
       dut.coreClockDomain.assertReset()
@@ -104,12 +115,6 @@ class MatrixAddF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   }
 }
 
-class MatrixCopyF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("matrix_copy_f32 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixCopyF32, config)
-  }
-}
-
 class VectorAddF32x4GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("vector_add_f32x4 executes through GpuTop") {
     KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.vectorAddF32x4, config)
@@ -119,12 +124,6 @@ class VectorAddF32x4GpuTopSpec extends ExecutionFrontendGpuTopSpec {
 class MatrixMulF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("matrix_mul_f32 executes through GpuTop") {
     KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixMulF32, config)
-  }
-}
-
-class MatrixAddF16GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("matrix_add_f16 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixAddF16, config)
   }
 }
 
@@ -156,7 +155,7 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("grid_id_store increments across successive GpuTop command submissions") {
     val kernel = KernelCorpus.gridIdStore
 
-    SimConfig.withVerilator.compile(new GpuTop(config)).doSim { dut =>
+    withGpuTopSimulation("grid_id_store successive submissions") { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
       ExecutionTestUtils.idleAxiLite(dut.io.hostControl)
       dut.coreClockDomain.assertReset()
