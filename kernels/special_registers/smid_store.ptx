@@ -1,0 +1,58 @@
+// Purpose: Store each CTA's %smid and %nsmid to global memory.
+// Primary feature: special_registers
+// Expected outcome: success
+//
+// High-level execution flow:
+// - One thread per CTA reads the current SM ID and total SM count.
+// - It uses %ctaid.x as a stable per-CTA output slot.
+// - It stores two words per CTA: smid and nsmid.
+//
+// Where this fits:
+// - This is the direct teaching kernel for real SM identity in the multi-SM cluster.
+// - It lets the tests check that CTAs are distributed across more than one physical SM.
+//
+// Key model details:
+// - The launch uses blockDim=(1,1,1), so CTA slot == blockIdx.x.
+// - Each record is 8 bytes because it stores two 32-bit words.
+// - The exact smid pattern is scheduler-dependent, but %nsmid should be constant.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void smid_store(unsigned* out) {
+//   unsigned smid, nsmid;
+//   asm volatile("mov.u32 %0, %%smid;" : "=r"(smid));
+//   asm volatile("mov.u32 %0, %%nsmid;" : "=r"(nsmid));
+//   unsigned* record = out + (blockIdx.x * 2);
+//   record[0] = smid;
+//   record[1] = nsmid;
+// }
+//
+// SpinalGPU note:
+// - The dispatcher chooses which SM runs a CTA. This kernel is intentionally tiny so the
+//   observed %smid pattern mostly reflects CTA distribution rather than workload imbalance.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry smid_store(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<8>;
+
+    // Setup
+    // Load the output base pointer and read the CTA x coordinate plus SM builtins.
+    ld.param.u32 %r0, [out_ptr_param];
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %smid;
+    mov.u32 %r3, %nsmid;
+
+    // Core
+    // Convert the CTA index into an 8-byte record offset.
+    shl.b32 %r4, %r1, 3;
+    add.u32 %r5, %r0, %r4;
+    st.global.u32 [%r5 + 0], %r2;
+    st.global.u32 [%r5 + 4], %r3;
+
+    // Exit
+    ret;
+}

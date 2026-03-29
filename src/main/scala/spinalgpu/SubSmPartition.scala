@@ -28,8 +28,7 @@ class SubSmPartition(config: SmConfig) extends Component {
     val bindRequest = out Bool()
     val bindLocalSlotId = out(UInt(config.localSlotIdWidth bits))
     val localContexts = in(Vec.fill(config.residentWarpsPerSubSm)(LocalSlotContextView(config)))
-    val currentCommand = in(KernelCommandDesc(config))
-    val currentGridId = in(UInt(64 bits))
+    val currentCommand = in(CtaCommandDesc(config))
     val contextUpdate = master(Flow(WarpContextWrite(config)))
     val status = out(SubSmStatus(config))
     val fetchMemReq = master(Stream(FetchMemReq(config)))
@@ -393,7 +392,6 @@ class SubSmPartition(config: SmConfig) extends Component {
   specialRegisterUnit.io.selectedWarpId := selectedWarpIdReg
   specialRegisterUnit.io.selectedContext := selectedContextReg
   specialRegisterUnit.io.currentCommand := io.currentCommand
-  specialRegisterUnit.io.currentGridId := io.currentGridId
 
   private val immediateUInt = decodeUnit.io.decoded.immediate.asUInt
   private val advancePc = (selectedContextReg.pc + U(4, config.addressWidth bits)).resized

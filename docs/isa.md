@@ -91,12 +91,20 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `GT9` | `ExecutionFrontendSimSpec`: `matrix_mul_f16_accum_f32` executes through `GpuTop` and writes expected FP32 output from FP16 inputs |
 | `GT10` | `ExecutionFrontendSimSpec`: `vector_add_e4m3x2` executes through `GpuTop` and writes expected packed E4M3x2 output |
 | `GT11` | `ExecutionFrontendSimSpec`: `matrix_mul_e5m2x2_accum_f32` executes through `GpuTop` and writes expected FP32 output from packed E5M2x2 inputs |
+| `GT12` | `MultiSmGpuTopSpec`: `block_id_store` executes through `GpuTop` over a real 3D CTA grid and writes `%ctaid/%nctaid` records |
+| `GT13` | `MultiSmGpuTopSpec`: `vector_add_multi_block` executes through `GpuTop` across multiple CTAs |
+| `GT14` | `MultiSmGpuTopSpec`: `smid_store` executes through `GpuTop` and writes real `%smid/%nsmid` values across multiple SMs |
+| `GT15` | `MultiSmGpuTopSpec`: `trap_block_one` executes through `GpuTop` and stops later CTA dispatch after the first CTA trap |
+| `GT16` | `MultiSmGpuTopSpec`: `matrix_add_multi_block_f32` executes through `GpuTop` across a real 2D CTA grid |
+| `GD1` | `GridDispatchControllerSpec`: dispatcher walks CTA coordinates in `x -> y -> z` order |
+| `GD2` | `GridDispatchControllerSpec`: dispatcher round-robins CTAs across SMs and backfills idle SMs |
+| `GD3` | `GridDispatchControllerSpec`: first SM fault stops further CTA dispatch and reports one kernel-global fault |
 
 ## Compatibility Summary
 
 | PTX family | Overall status | Coverage | Notes |
 | --- | --- | --- | --- |
-| Execution and launch model | `Partial` | `Direct` | Classic SIMT v1 on one SM, one block per launch, full 3D block-shape ABI, no divergent reconvergence support |
+| Execution and launch model | `Partial` | `Direct` | Classic SIMT v1 on one or more physical SMs, one kernel globally in flight, one resident CTA per SM, real 3D CTA grids, and no divergent reconvergence support |
 | Module and entry contract | `Partial` | `Direct` | One `.visible .entry` per file, `.param .u32` only |
 | Types, registers, and predicates | `Partial` | `Direct` | `.u32`, `.f32`, `.f16`, `.f16x2`, and `.b16` share one physical 32-bit register pool; PTX vector tuples reuse `%f` registers; `%gridid` remains the only narrow public `.u64` path |
 | Special registers | `Partial` | `Direct` | `tid/ntid/ctaid/nctaid.{x,y,z}` plus core SIMT/SM builtins are covered directly; `%gridid` remains a narrow `.u64` path |
@@ -108,13 +116,15 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 
 Current matrix support in SpinalGPU should be read as **matrix v1**:
 
-- one CTA per launch
+- the teaching ladder defaults to one CTA, even though the runtime now supports real multi-CTA grids
 - untiled row-major kernels
 - inputs and outputs in global memory
 - scalar CUDA-core FP32 execution under the hood
-- no shared-memory tiling, tensor instructions, or multi-CTA `blockIdx` decomposition yet
+- no shared-memory tiling, tensor instructions, or matrix-specific multi-CTA tiling/decomposition yet
 
 The current teaching ladder for that matrix v1 path is `matrix_copy_f32`, `matrix_transpose_f32`, `matrix_add_f32`, and `matrix_mul_f32`.
+
+The runtime also now includes one explicit multi-CTA matrix teaching case, `matrix_add_multi_block_f32`, to prove that CTA-grid decomposition works across multiple SMs without changing the untiled matrix-v1 execution model.
 
 Low-precision CUDA-core kernels extend that same matrix v1 model rather than defining a separate matrix architecture:
 
@@ -126,12 +136,12 @@ Low-precision CUDA-core kernels extend that same matrix v1 model rather than def
 
 | Capability | PTX requires | SpinalGPU status | Coverage | Evidence | Current notes |
 | --- | --- | --- | --- | --- | --- |
-| SIMT warp execution | PTX kernels execute many logical threads grouped into warps and CTAs | `Implemented` | `Direct` | `SM1`, `SM3`-`SM7` | Current frontend runs classic SIMT with one selected warp and one issued warp instruction at a time. |
+| SIMT warp execution | PTX kernels execute many logical threads grouped into warps and CTAs | `Implemented` | `Direct` | `SM1`, `SM3`-`SM7`, `GT12`, `GT13` | Each physical SM runs classic SIMT with one selected warp and one issued warp instruction at a time. The chip-level cluster dispatches CTAs across multiple SMs. |
 | One warp PC + active mask model | The implementation must preserve PTX per-thread semantics across active lanes | `Partial` | `Direct` | `SM1`, `SM10` | SpinalGPU uses one PC plus one active mask per warp; no reconvergence stack or independent thread scheduling exists. |
-| One block per launch | PTX launch semantics assume grid/block decomposition | `Partial` | `Direct` | `SM1`, `GT1` | The host ABI carries full 3D grid/block fields, but v1 still requires `gridDim = (1,1,1)` and launches one CTA. |
-| CUDA-style 3D block shape | PTX thread builtins are dimensioned in `x/y/z` | `Partial` | `Direct` | `PA7`, `SM14`, `SM15` | `blockDim.{x,y,z}` and `tid.{x,y,z}` are real. `ctaid.{x,y,z}` are fixed at zero and `nctaid.{x,y,z}` at one because only one CTA launches. |
-| Launch-time `ENTRY_PC / GRID_DIM_{X,Y,Z} / BLOCK_DIM_{X,Y,Z} / ARG_BASE / SHARED_BYTES` | The runtime must supply entry metadata, parameter base, and shared-memory size | `Implemented` | `Direct` | `SM1`, `GT1`, `GT3`, `GT4` | This is a repo-specific MMIO ABI. `ENTRY_PC` points at SpinalGPU machine code, not PTX source text. |
-| Completion and fault signaling | The runtime must observe completion and runtime failure | `Implemented` | `Direct` | `GT1`, `SM2`, `SM8`-`SM11` | `STATUS.done` is raised on both success and fault. `FAULT_PC` and `FAULT_CODE` disambiguate failure. |
+| Real CTA grid scheduling | PTX launch semantics assume grid/block decomposition | `Implemented` | `Direct` | `GD1`, `GD2`, `GT12`, `GT13`, `GT14` | The cluster dispatcher walks the full 3D CTA grid, assigns CTAs to idle SMs round-robin, and keeps one resident CTA per SM in this phase. |
+| CUDA-style 3D block and grid shape | PTX thread and CTA builtins are dimensioned in `x/y/z` | `Implemented` | `Direct` | `PA7`, `GD1`, `GT12` | `blockDim.{x,y,z}`, `tid.{x,y,z}`, `gridDim.{x,y,z}`, `ctaid.{x,y,z}`, and `nctaid.{x,y,z}` are all real in the current runtime. |
+| Launch-time `ENTRY_PC / GRID_DIM_{X,Y,Z} / BLOCK_DIM_{X,Y,Z} / ARG_BASE / SHARED_BYTES` | The runtime must supply entry metadata, parameter base, and shared-memory size | `Implemented` | `Direct` | `SM1`, `GT1`, `GT3`, `GT4`, `GT12`, `GT13` | This is a repo-specific MMIO ABI. `ENTRY_PC` points at SpinalGPU machine code, not PTX source text. The grid fields are now consumed by the chip-level dispatcher, not just stored. |
+| Completion and fault signaling | The runtime must observe completion and runtime failure | `Implemented` | `Direct` | `GT1`, `SM2`, `SM8`-`SM11`, `GD3`, `GT15` | `STATUS.done` is raised on both success and fault. In the multi-SM path, the first CTA fault stops later CTA dispatch and is reported once the cluster drains. |
 | Divergent control flow and reconvergence | Lane-varying control flow must reconverge correctly | `Missing` | `Direct` | `SM10` | Non-uniform branches do not reconverge; they raise `non_uniform_branch`. |
 
 ## Module And Entry Contract
@@ -170,8 +180,8 @@ Low-precision CUDA-core kernels extend that same matrix v1 model rather than def
 | --- | --- | --- | --- | --- | --- |
 | `%tid.{x,y,z}` | Thread index within the current block | `Implemented` | `Direct` | `PA7`, `SM3`, `SM14`, `SM15` | `tid.x` is exercised by the existing integer kernels; `tid.y` and `tid.z` are now lowered and dimensioned from the launch-time 3D block shape. |
 | `%ntid.{x,y,z}` | Block dimensions visible to each thread | `Implemented` | `Direct` | `PA7`, `SM12`, `SM14`, `SM15` | All three dimensions are carried in the host ABI and returned directly from the current command descriptor. |
-| `%ctaid.{x,y,z}`, `%nctaid.{x,y,z}` | CTA coordinates and grid shape builtins | `Partial` | `Direct` | `SM12`, `SM14`, `SM15` | The full `x/y/z` surface exists, but v1 still launches exactly one CTA, so `%ctaid.* == 0` and `%nctaid.* == 1`. |
-| `%laneid`, `%warpid`, `%nwarpid`, `%smid`, `%nsmid` | PTX exposes lane, warp, block, and SM builtins | `Implemented` | `Direct` | `PA6`, `SM12` | These builtins are accepted by the assembler and mapped directly in hardware for the current one-SM architecture. |
+| `%ctaid.{x,y,z}`, `%nctaid.{x,y,z}` | CTA coordinates and grid shape builtins | `Implemented` | `Direct` | `GT12`, `GD1` | These values come from the cluster-dispatched CTA descriptor and the launch-time 3D grid shape. |
+| `%laneid`, `%warpid`, `%nwarpid`, `%smid`, `%nsmid` | PTX exposes lane, warp, block, and SM builtins | `Implemented` | `Direct` | `PA6`, `SM12`, `GT14` | `%laneid/%warpid/%nwarpid` are SM-local. `%smid/%nsmid` now come from the chip-level SM assignment and configured SM count. |
 | `%gridid` | PTX exposes a temporal grid launch identifier | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only as `.u64` via `mov.u64 %rdX, %gridid`, backed by a launch counter and typically consumed with `st.global.u64`. |
 
 Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalGPU escape hatch for `.param` lowering. It is not part of the intended public PTX subset contract and is intentionally excluded from the matrix.

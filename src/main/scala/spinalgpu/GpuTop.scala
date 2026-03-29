@@ -25,14 +25,14 @@ class GpuTop(val config: SmConfig = SmConfig.default) extends Component {
 
   val core = new ClockingArea(coreClockDomain) {
     val hostControlBlock = new HostControlBlock(config)
-    val streamingMultiprocessor = new StreamingMultiprocessor(config)
+    val gpuCluster = new GpuCluster(config)
 
     hostControlBlock.io.axi <> io.hostControl
-    streamingMultiprocessor.io.command.command := hostControlBlock.io.command
-    streamingMultiprocessor.io.command.start := hostControlBlock.io.start
-    streamingMultiprocessor.io.command.clearDone := hostControlBlock.io.clearDone
-    hostControlBlock.io.executionStatus := streamingMultiprocessor.io.command.executionStatus
-    io.debugExecutionStatus := streamingMultiprocessor.io.command.executionStatus
-    io.memory <> streamingMultiprocessor.io.memory
+    gpuCluster.io.command.command := hostControlBlock.io.command
+    gpuCluster.io.command.start := hostControlBlock.io.start
+    gpuCluster.io.command.clearDone := hostControlBlock.io.clearDone
+    hostControlBlock.io.executionStatus := gpuCluster.io.command.executionStatus
+    io.debugExecutionStatus := gpuCluster.io.command.executionStatus
+    io.memory <> gpuCluster.io.memory
   }
 }

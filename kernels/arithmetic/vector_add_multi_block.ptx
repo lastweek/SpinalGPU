@@ -1,0 +1,70 @@
+// Purpose: Compute C[i] = A[i] + B[i] across multiple CTAs using %ctaid.x and %tid.x.
+// Primary feature: arithmetic
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread computes its global vector index from block coordinates and local thread coordinates.
+// - It forms byte addresses for A[i], B[i], and C[i], loads the two inputs, adds them,
+//   and stores the sum to the output vector.
+// - Multiple CTAs cooperate to cover one longer vector.
+//
+// Where this fits:
+// - This is the first teaching kernel that requires real block scheduling across a grid.
+// - It bridges the earlier one-CTA vector kernels to real multi-block execution.
+//
+// Key model details:
+// - global_i = (%ctaid.x * %ntid.x) + %tid.x.
+// - shl.b32 scales the global element index by 4 bytes for FP32/u32-sized memory accesses.
+// - The corpus launch uses an exact vector length equal to gridDim.x * blockDim.x, so no
+//   bounds predicate is needed in the teaching version.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_add_multi_block(const unsigned* A, const unsigned* B, unsigned* C) {
+//   unsigned global_i = (blockIdx.x * blockDim.x) + threadIdx.x;
+//   C[global_i] = A[global_i] + B[global_i];
+// }
+//
+// SpinalGPU note:
+// - This kernel stays integer-typed on purpose. The teaching point is real block/grid
+//   index formation, not FP32 arithmetic.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_add_multi_block(
+    .param .u32 a_ptr_param,
+    .param .u32 b_ptr_param,
+    .param .u32 c_ptr_param
+)
+{
+    .reg .u32 %r<12>;
+
+    // Setup
+    // Load the three vector base pointers and read the block-local/global indexing inputs.
+    ld.param.u32 %r0, [a_ptr_param];
+    ld.param.u32 %r1, [b_ptr_param];
+    ld.param.u32 %r2, [c_ptr_param];
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mov.u32 %r5, %tid.x;
+
+    // Core
+    // Form the global element index from blockIdx.x and threadIdx.x.
+    mul.lo.u32 %r6, %r3, %r4;
+    add.u32 %r6, %r6, %r5;
+
+    // Convert the global element index into byte addresses for A, B, and C.
+    shl.b32 %r7, %r6, 2;
+    add.u32 %r8, %r0, %r7;
+    add.u32 %r9, %r1, %r7;
+    add.u32 %r10, %r2, %r7;
+
+    // Load the two 32-bit inputs, add them, and store the result vector element.
+    ld.global.u32 %r11, [%r8];
+    ld.global.u32 %r6, [%r9];
+    add.u32 %r11, %r11, %r6;
+    st.global.u32 [%r10], %r11;
+
+    // Exit
+    ret;
+}

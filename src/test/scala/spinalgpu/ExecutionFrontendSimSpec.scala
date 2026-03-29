@@ -109,6 +109,10 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
   }
 }
 
+abstract class MultiSmExecutionFrontendGpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  override protected val config: SmConfig = KernelCorpus.multiSmRegressionConfig
+}
+
 class MatrixAddF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
   test("matrix_add_f32 executes through GpuTop") {
     KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixAddF32, config)
@@ -193,6 +197,14 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
   }
 }
 
+class MultiSmGpuTopSpec extends MultiSmExecutionFrontendGpuTopSpec {
+  KernelCorpus.multiSmGpuTopCases.foreach { kernel =>
+    test(s"${kernel.name} executes through GpuTop with curated multi-SM coverage") {
+      KernelCorpusTestUtils.runGpuTopKernelCase(kernel, config)
+    }
+  }
+}
+
 class ExecutionFrontendSuiteContractSpec extends AnyFunSuite with Matchers {
   KernelCorpus.gpuTopCases.foreach { kernel =>
     ignore(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
@@ -203,6 +215,13 @@ class ExecutionFrontendSuiteContractSpec extends AnyFunSuite with Matchers {
   test("kernel corpus keeps at least one GpuTop-targeted case") {
     KernelCorpus.gpuTopCases should not be empty
     KernelCorpus.gpuTopCases.foreach { kernel =>
+      kernel.harnessTargets should contain(KernelCorpus.HarnessTarget.GpuTop)
+    }
+  }
+
+  test("kernel corpus keeps curated multi-SM GpuTop cases") {
+    KernelCorpus.multiSmGpuTopCases should not be empty
+    KernelCorpus.multiSmGpuTopCases.foreach { kernel =>
       kernel.harnessTargets should contain(KernelCorpus.HarnessTarget.GpuTop)
     }
   }

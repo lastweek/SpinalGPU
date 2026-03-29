@@ -1,0 +1,64 @@
+// Purpose: Trap when CTA 1 executes, so later CTAs should never be dispatched.
+// Primary feature: control
+// Expected outcome: fault
+//
+// High-level execution flow:
+// - Each CTA reads %ctaid.x.
+// - CTA 1 branches to an explicit trap.
+// - Any CTA that does not trap stores its CTA ID to one output slot and exits normally.
+//
+// Where this fits:
+// - This is the direct teaching kernel for kernel-global fault handling in the cluster dispatcher.
+// - It proves that a CTA fault stops further grid dispatch rather than only killing one CTA.
+//
+// Key model details:
+// - The launch uses blockDim=(1,1,1), so one CTA writes one scalar slot.
+// - The faulting CTA branches to a trap label because the current PTX frontend only supports
+//   predicated bra, not predicated trap.
+// - The expected outcome is a kernel-global trap fault.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void trap_block_one(unsigned* out) {
+//   if (blockIdx.x == 1) {
+//     __trap();
+//   }
+//   out[blockIdx.x] = blockIdx.x;
+// }
+//
+// SpinalGPU note:
+// - This kernel is intentionally one-thread-per-CTA so the observed behavior isolates CTA
+//   dispatch and global fault handling rather than intra-block control flow.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry trap_block_one(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<6>;
+    .pred %p<1>;
+
+    // Setup
+    // Load the output pointer and read the current CTA x coordinate.
+    ld.param.u32 %r0, [out_ptr_param];
+    mov.u32 %r1, %ctaid.x;
+
+    // Core
+    // CTA 1 branches to the explicit trap path. Other CTAs store their CTA ID.
+    setp.eq.u32 %p0, %r1, 1;
+    @%p0 bra do_trap;
+
+    shl.b32 %r2, %r1, 2;
+    add.u32 %r3, %r0, %r2;
+    st.global.u32 [%r3], %r1;
+    bra done;
+
+    // Fault trigger
+do_trap:
+    trap;
+
+done:
+    // Non-faulting CTAs fall through to the shared return path after their store.
+    ret;
+}

@@ -107,6 +107,7 @@ Typical examples:
 - `arithmetic/matrix_copy_f32.ptx`
 - `arithmetic/matrix_transpose_f32.ptx`
 - `arithmetic/matrix_add_f32.ptx`
+- `arithmetic/matrix_add_multi_block_f32.ptx`
 - `arithmetic/matrix_mul_f32.ptx`
 - `arithmetic/matrix_add_f16.ptx`
 - `arithmetic/matrix_mul_f16_accum_f32.ptx`
@@ -120,11 +121,18 @@ Practical meaning:
 
 Current matrix v1 in this repo means:
 
-- one CTA per launch
+- the checked-in matrix teaching ladder defaults to one CTA
 - untiled row-major kernels
 - inputs and outputs in global memory
 - scalar CUDA-core FP32 execution under the hood
-- no shared-memory tiling and no multi-CTA `blockIdx` decomposition yet
+- no shared-memory tiling and no matrix-specific multi-CTA `blockIdx` decomposition yet
+
+The runtime itself is now broader than that matrix teaching subset:
+
+- `GpuTop` can dispatch a real 3D CTA grid across multiple physical SMs
+- `%ctaid.{x,y,z}`, `%nctaid.{x,y,z}`, `%smid`, and `%nsmid` are real for dedicated multi-block kernels such as `special_registers/block_id_store.ptx`, `special_registers/smid_store.ptx`, and `arithmetic/vector_add_multi_block.ptx`
+- `arithmetic/matrix_add_multi_block_f32.ptx` is the first matrix teaching kernel that uses that real multi-CTA path
+- the rest of the matrix ladder remains intentionally simpler so it teaches matrix indexing and arithmetic before tiled multi-CTA decomposition
 
 ## Low-Precision Kernel Patterns
 

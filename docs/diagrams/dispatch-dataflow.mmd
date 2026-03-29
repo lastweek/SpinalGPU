@@ -1,18 +1,13 @@
 flowchart LR
-  READY[Global Ready Pool]
+  GRID[GridDispatchController]
+  CTA0[CTA desc -> SM 0]
+  CTA1[CTA desc -> SM 1]
+  READY[SM-local Ready Pool]
   BINDER[WarpBinder]
-  SLOT0[SubSm 0 Local Slots]
-  SLOT1[SubSm 1 Local Slots]
-  SLOT2[SubSm 2 Local Slots]
-  SLOT3[SubSm 3 Local Slots]
-  EXEC0[CUDA / LSU / SFU / Tensor 0]
-  EXEC1[CUDA / LSU / SFU / Tensor 1]
-  EXEC2[CUDA / LSU / SFU / Tensor 2]
-  EXEC3[CUDA / LSU / SFU / Tensor 3]
+  SLOT0[SubSm Local Slots]
+  EXEC0[CUDA / LSU / SFU / Tensor]
   WB[WarpStateTable + Writeback]
 
-  READY --> BINDER
-  BINDER --> SLOT0 --> EXEC0 --> WB
-  BINDER --> SLOT1 --> EXEC1 --> WB
-  BINDER --> SLOT2 --> EXEC2 --> WB
-  BINDER --> SLOT3 --> EXEC3 --> WB
+  GRID --> CTA0 --> READY
+  GRID --> CTA1
+  READY --> BINDER --> SLOT0 --> EXEC0 --> WB

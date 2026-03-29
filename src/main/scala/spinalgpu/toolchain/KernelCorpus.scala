@@ -3,6 +3,7 @@ package spinalgpu.toolchain
 import java.nio.file.Path
 import spinalgpu.FaultCode
 import spinalgpu.LowPrecisionCodec
+import spinalgpu.SmConfig
 
 /** Single source of truth for the PTX teaching corpus.
   *
@@ -117,13 +118,14 @@ object KernelCorpus {
       override val expectedOutcomeId: String = "success"
     }
 
-    final case class Fault(code: Int, faultPc: Option[Long] = None) extends KernelExpectation {
+    final case class Fault(code: Int, faultPc: Option[Long] = None, checks: Seq[SuccessCheck] = Seq.empty) extends KernelExpectation {
       override val expectedOutcomeId: String = "fault"
     }
   }
 
   val sourceRoot: Path = Path.of("kernels")
   val outputRoot: Path = Path.of("generated", "kernels")
+  val multiSmRegressionConfig: SmConfig = SmConfig.default.copy(smCount = 2)
 
   final case class KernelCase(
       name: String,
@@ -200,6 +202,19 @@ object KernelCorpus {
       sum
     }
   }
+
+  private def blockIdStoreExpected(gridX: Int, gridY: Int, gridZ: Int): Seq[Long] =
+    for {
+      z <- 0 until gridZ
+      y <- 0 until gridY
+      x <- 0 until gridX
+      value <- Seq(x.toLong, y.toLong, z.toLong, gridX.toLong, gridY.toLong, gridZ.toLong)
+    } yield value
+
+  private def smidStoreExpected(smCount: Int, gridX: Int): Seq[Long] =
+    (0 until gridX).flatMap { ctaX =>
+      Seq((ctaX % smCount).toLong, smCount.toLong)
+    }
 
   private val reluClampInput: Seq[Float] = Seq(-3.0f, -1.0f, 0.25f, 1.5f, 2.5f, 4.0f, 7.0f, 8.5f)
   private val reluClampLimit: Seq[Float] = Seq.fill(8)(3.5f)
@@ -279,6 +294,11 @@ object KernelCorpus {
 
   private val vectorAddF32x4Expected: Seq[Float] =
     vectorAddF32x4InputA.zip(vectorAddF32x4InputB).map { case (a, b) => a + b }
+
+  private val vectorAddMultiBlockInputA: Seq[Long] = (0 until 32).map(index => (index * 3).toLong)
+  private val vectorAddMultiBlockInputB: Seq[Long] = (0 until 32).map(index => (100 - index).toLong)
+  private val vectorAddMultiBlockExpected: Seq[Long] =
+    vectorAddMultiBlockInputA.zip(vectorAddMultiBlockInputB).map { case (a, b) => (a + b) & 0xFFFFFFFFL }
 
   private def halfBits(value: Float): Int = LowPrecisionCodec.floatToHalfBits(value)
 
@@ -573,6 +593,34 @@ object KernelCorpus {
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
+  val blockIdStore: KernelCase = KernelCase(
+    name = "block_id_store",
+    relativeSourcePath = "special_registers/block_id_store.ptx",
+    purpose = "Store each CTA's %ctaid.{x,y,z} and %nctaid.{x,y,z} to global memory.",
+    primaryFeature = SpecialRegisters,
+    secondaryFeatures = Seq(GlobalMemory, Control),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, blockDimY = 1, blockDimZ = 1, gridDimX = 2, gridDimY = 2, gridDimZ = 2, argBase = 0x2A0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(WriteArgBuffer(base = 0x2A0, values = Seq(0xB000L))),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xB000, values = blockIdStoreExpected(gridX = 2, gridY = 2, gridZ = 2)))),
+    harnessTargets = Seq(GpuTop)
+  )
+
+  val smidStore: KernelCase = KernelCase(
+    name = "smid_store",
+    relativeSourcePath = "special_registers/smid_store.ptx",
+    purpose = "Store each CTA's %smid and %nsmid to global memory.",
+    primaryFeature = SpecialRegisters,
+    secondaryFeatures = Seq(GlobalMemory, Control),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, gridDimX = 4, argBase = 0x2C0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(WriteArgBuffer(base = 0x2C0, values = Seq(0xB080L))),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xB080, values = smidStoreExpected(smCount = 2, gridX = 4)))),
+    harnessTargets = Seq(GpuTop)
+  )
+
   val uniformLoop: KernelCase = KernelCase(
     name = "uniform_loop",
     relativeSourcePath = "control/uniform_loop.ptx",
@@ -617,6 +665,42 @@ object KernelCorpus {
       checks = Seq(ExpectWords(base = 0x700, values = (0 until 8).map(index => (index + (index * 10)).toLong)))
     ),
     harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val vectorAddMultiBlock: KernelCase = KernelCase(
+    name = "vector_add_multi_block",
+    relativeSourcePath = "arithmetic/vector_add_multi_block.ptx",
+    purpose = "Compute C[i] = A[i] + B[i] across multiple CTAs using %ctaid.x and %tid.x.",
+    primaryFeature = Arithmetic,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, gridDimX = 4, argBase = 0x5A0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0xB100, values = vectorAddMultiBlockInputA),
+      WriteDataWords(base = 0xB200, values = vectorAddMultiBlockInputB),
+      WriteArgBuffer(base = 0x5A0, values = Seq(0xB100L, 0xB200L, 0xB300L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xB300, values = vectorAddMultiBlockExpected))),
+    harnessTargets = Seq(GpuTop)
+  )
+
+  val matrixAddMultiBlockF32: KernelCase = KernelCase(
+    name = "matrix_add_multi_block_f32",
+    relativeSourcePath = "arithmetic/matrix_add_multi_block_f32.ptx",
+    purpose = "Add two FP32 row-major matrices across multiple CTAs using %ctaid.{x,y} and 2D thread coordinates.",
+    primaryFeature = FloatingPoint,
+    secondaryFeatures = Seq(Arithmetic, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 4, blockDimY = 4, gridDimX = 2, gridDimY = 2, argBase = 0x620),
+    timeoutCycles = 60000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0xC000, values = matrixAddInputA(rows = 8, cols = 8)),
+      WriteDataF32(base = 0xC200, values = matrixAddInputB(rows = 8, cols = 8)),
+      WriteArgBuffer(base = 0x620, values = Seq(0xC000L, 0xC200L, 0xC400L, 8L, 8L, 8L, 8L, 8L))
+    ),
+    expectation = Success(checks = Seq(ExpectF32(base = 0xC400, values = matrixAddExpected(rows = 8, cols = 8)))),
+    harnessTargets = Seq(GpuTop)
   )
 
   val vectorLoadStoreF32x2: KernelCase = KernelCase(
@@ -1113,15 +1197,40 @@ object KernelCorpus {
     harnessTargets = Seq(StreamingMultiprocessor)
   )
 
+  val trapBlockOne: KernelCase = KernelCase(
+    name = "trap_block_one",
+    relativeSourcePath = "control/trap_block_one.ptx",
+    purpose = "Trap when CTA 1 executes, so later CTAs should never be dispatched.",
+    primaryFeature = Control,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = KernelLevel.Fault,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 1, gridDimX = 4, argBase = 0x2E0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteArgBuffer(base = 0x2E0, values = Seq(0xB400L)),
+      WriteDataWords(base = 0xB400, values = Seq.fill(4)(0xDEADBEEFL))
+    ),
+    expectation = KernelExpectation.Fault(
+      code = FaultCode.Trap,
+      faultPc = Some(0x12CL),
+      checks = Seq(ExpectWords(base = 0xB400, values = Seq(0L, 0xDEADBEEFL, 0xDEADBEEFL, 0xDEADBEEFL)))
+    ),
+    harnessTargets = Seq(GpuTop)
+  )
+
   val all: Seq[KernelCase] = Seq(
     addStoreExit,
     threadIdStore,
     threadIdStore256,
     basicSpecialRegisterStore,
     gridIdStore,
+    blockIdStore,
+    smidStore,
     uniformLoop,
     sharedRoundtrip,
     vectorAdd1Warp,
+    vectorAddMultiBlock,
+    matrixAddMultiBlockF32,
     vectorLoadStoreF32x2,
     vectorLoadStoreF32x4,
     vectorAddF32x4,
@@ -1150,10 +1259,29 @@ object KernelCorpus {
     warpidStallIsolation,
     nonUniformBranch,
     misalignedStore,
-    trap
+    trap,
+    trapBlockOne
   )
 
-  val gpuTopCases: Seq[KernelCase] = all.filter(_.harnessTargets.contains(HarnessTarget.GpuTop))
+  val gpuTopCases: Seq[KernelCase] = Seq(
+    addStoreExit,
+    gridIdStore,
+    vectorAddF32x4,
+    matrixCopyF32,
+    matrixAddF32,
+    matrixMulF32,
+    matrixAddF16,
+    matrixMulF16AccumF32,
+    vectorAddE4m3x2,
+    matrixMulE5m2x2AccumF32
+  )
+  val multiSmGpuTopCases: Seq[KernelCase] = Seq(
+    blockIdStore,
+    smidStore,
+    vectorAddMultiBlock,
+    matrixAddMultiBlockF32,
+    trapBlockOne
+  )
   val streamingMultiprocessorCases: Seq[KernelCase] =
     all.filter(_.harnessTargets.contains(HarnessTarget.StreamingMultiprocessor))
 }

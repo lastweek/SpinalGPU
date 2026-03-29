@@ -15,8 +15,8 @@
 //
 // Key model details:
 // - The sections are spaced by 40 words, which is 160 bytes for the default blockDimX=40 case.
-// - Some builtins collapse to constants in this repo: one CTA means %ctaid.x == 0 and
-//   %nctaid.x == 1, and the one-SM model means %smid == 0 and %nsmid == 1.
+// - This teaching launch still uses one CTA on one SM, so this specific kernel observes
+//   %ctaid.x == 0, %nctaid.x == 1, %smid == 0, and %nsmid == 1.
 //
 // CUDA-equivalent sketch (.cu):
 // __global__ void basic_special_register_store(unsigned* out) {
@@ -41,8 +41,8 @@
 // }
 //
 // SpinalGPU note:
-// - The sketch is close, but the observed values are shaped by this repo's one-CTA,
-//   one-SM teaching runtime, so several builtins collapse to simple constants here.
+// - The runtime now supports real CTA grids across multiple SMs, but this particular kernel
+//   still uses a one-CTA, one-SM teaching launch so several builtins collapse to constants.
 .version 8.0
 .target spinalgpu
 .address_size 32

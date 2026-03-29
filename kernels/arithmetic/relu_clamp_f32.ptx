@@ -13,7 +13,7 @@
 // Key model details:
 // - Inputs and outputs live in global memory and are addressed as rowless 1D FP32 arrays.
 // - `%tid.x` picks the element index and `shl.b32` scales by 4 bytes per FP32 value.
-// - The current runtime still launches one CTA, so the kernel only needs thread coordinates.
+// - This teaching launch still uses one CTA, so the kernel only needs thread coordinates.
 // CUDA-equivalent sketch (.cu):
 // __global__ void relu_clamp_f32(const float* in, const float* clamp_hi, float* out) {
 //   unsigned idx = threadIdx.x;

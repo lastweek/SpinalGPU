@@ -1,15 +1,12 @@
 flowchart LR
-  SUBS[4 x SubSm LSU / IFU]
-  L0I[4 x L0 Instruction Cache]
-  L1I[L1InstructionCache]
-  L1D[L1DataSharedMemory]
-  SHMEM[SharedMemory]
-  ARB[ExternalMemoryArbiter]
+  SM0[SM 0 SubSm LSU / IFU]
+  SM1[SM 1 SubSm LSU / IFU]
+  L0I[L0 / L1 / Shared per SM]
+  ARB[ClusterExternalMemoryArbiter]
   AXIADAPT[ExternalMemoryAxiAdapter]
   AXI[AXI4 Master Port]
   MEM[External Memory Model / Controller]
 
-  SUBS --> L0I --> L1I --> ARB
-  SUBS --> L1D --> SHMEM
-  L1D --> ARB
+  SM0 --> L0I --> ARB
+  SM1 --> L0I --> ARB
   ARB --> AXIADAPT --> AXI --> MEM

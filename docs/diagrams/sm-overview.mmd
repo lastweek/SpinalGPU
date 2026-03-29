@@ -1,38 +1,17 @@
 flowchart TB
   GpuTop[GpuTop]
   AXI[AXI4 Memory Boundary]
-  SM[StreamingMultiprocessor]
-  WST[WarpStateTable]
-  BINDER[WarpBinder]
-  L1I[L1InstructionCache]
-  L1D[L1DataSharedMemory]
-  SHMEM[SharedMemory]
-  ARB[ExternalMemoryArbiter]
+  CLUSTER[GpuCluster]
+  DISPATCH[GridDispatchController]
+  CMEM[ClusterExternalMemoryArbiter]
   AXIADAPT[ExternalMemoryAxiAdapter]
+  SM0[SmExecutionCore 0]
+  SM1[SmExecutionCore 1]
 
-  subgraph PARTS[4 x SubSmPartition]
-    SUB0[SubSmPartition 0]
-    SUB1[SubSmPartition 1]
-    SUB2[SubSmPartition 2]
-    SUB3[SubSmPartition 3]
-  end
-
-  GpuTop --> SM
-  SM --> WST
-  SM --> BINDER
-  BINDER --> SUB0
-  BINDER --> SUB1
-  BINDER --> SUB2
-  BINDER --> SUB3
-  SUB0 --> L1I
-  SUB1 --> L1I
-  SUB2 --> L1I
-  SUB3 --> L1I
-  SUB0 --> L1D
-  SUB1 --> L1D
-  SUB2 --> L1D
-  SUB3 --> L1D
-  L1D --> SHMEM
-  L1I --> ARB
-  L1D --> ARB
-  ARB --> AXIADAPT --> AXI
+  GpuTop --> CLUSTER
+  CLUSTER --> DISPATCH
+  CLUSTER --> SM0
+  CLUSTER --> SM1
+  SM0 --> CMEM
+  SM1 --> CMEM
+  CMEM --> AXIADAPT --> AXI

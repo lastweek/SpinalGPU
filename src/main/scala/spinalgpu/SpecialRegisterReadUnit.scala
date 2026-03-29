@@ -9,8 +9,7 @@ class SpecialRegisterReadUnit(config: SmConfig) extends Component {
     val decoded = in(DecodedInstruction(config))
     val selectedWarpId = in(UInt(config.warpIdWidth bits))
     val selectedContext = in(WarpContext(config))
-    val currentCommand = in(KernelCommandDesc(config))
-    val currentGridId = in(UInt(64 bits))
+    val currentCommand = in(CtaCommandDesc(config))
     val values = out(Vec(UInt(config.dataWidth bits), config.warpSize))
   }
 
@@ -21,8 +20,8 @@ class SpecialRegisterReadUnit(config: SmConfig) extends Component {
   private val blockWarpCount =
     ((currentBlockThreadCount.resized.resize(config.dataWidth bits) + U(config.warpSize - 1, config.dataWidth bits)) /
       U(config.warpSize, config.dataWidth bits)).resized
-  private val gridIdLow = io.currentGridId(31 downto 0).resize(config.dataWidth)
-  private val gridIdHigh = io.currentGridId(63 downto 32).resize(config.dataWidth)
+  private val gridIdLow = io.currentCommand.gridId(31 downto 0).resize(config.dataWidth)
+  private val gridIdHigh = io.currentCommand.gridId(63 downto 32).resize(config.dataWidth)
 
   private val laneTidX = Vec(UInt(config.threadCountWidth bits), config.warpSize)
   private val laneTidY = Vec(UInt(config.threadCountWidth bits), config.warpSize)
@@ -73,31 +72,31 @@ class SpecialRegisterReadUnit(config: SmConfig) extends Component {
         io.values(lane) := io.currentCommand.blockDimZ.resize(config.dataWidth)
       }
       is(U(SpecialRegisterKind.CtaidX, config.specialRegisterWidth bits)) {
-        io.values(lane) := 0
+        io.values(lane) := io.currentCommand.ctaidX
       }
       is(U(SpecialRegisterKind.CtaidY, config.specialRegisterWidth bits)) {
-        io.values(lane) := 0
+        io.values(lane) := io.currentCommand.ctaidY
       }
       is(U(SpecialRegisterKind.CtaidZ, config.specialRegisterWidth bits)) {
-        io.values(lane) := 0
+        io.values(lane) := io.currentCommand.ctaidZ
       }
       is(U(SpecialRegisterKind.NctaidX, config.specialRegisterWidth bits)) {
-        io.values(lane) := 1
+        io.values(lane) := io.currentCommand.gridDimX
       }
       is(U(SpecialRegisterKind.NctaidY, config.specialRegisterWidth bits)) {
-        io.values(lane) := 1
+        io.values(lane) := io.currentCommand.gridDimY
       }
       is(U(SpecialRegisterKind.NctaidZ, config.specialRegisterWidth bits)) {
-        io.values(lane) := 1
+        io.values(lane) := io.currentCommand.gridDimZ
       }
       is(U(SpecialRegisterKind.NwarpId, config.specialRegisterWidth bits)) {
         io.values(lane) := blockWarpCount
       }
       is(U(SpecialRegisterKind.SmId, config.specialRegisterWidth bits)) {
-        io.values(lane) := 0
+        io.values(lane) := io.currentCommand.smId.resize(config.dataWidth)
       }
       is(U(SpecialRegisterKind.NsmId, config.specialRegisterWidth bits)) {
-        io.values(lane) := 1
+        io.values(lane) := U(config.smCount, config.dataWidth bits)
       }
       is(U(SpecialRegisterKind.GridIdLo, config.specialRegisterWidth bits)) {
         io.values(lane) := gridIdLow

@@ -6,6 +6,7 @@ import spinal.lib.bus.amba4.axilite.AxiLite4Config
 
 case class SmConfig(
     warpSize: Int = 32,
+    smCount: Int = 1,
     subSmCount: Int = 4,
     residentWarpsPerSubSm: Int = 2,
     subSmIssueWidth: Int = 32,
@@ -28,6 +29,7 @@ case class SmConfig(
     controlAddressWidth: Int = 8
 ) {
   require(warpSize > 0 && warpSize % 8 == 0, "warpSize must be a positive multiple of 8")
+  require(smCount > 0, "smCount must be positive")
   require(subSmCount > 0, "subSmCount must be positive")
   require(residentWarpsPerSubSm > 0, "residentWarpsPerSubSm must be positive")
   require(subSmIssueWidth > 0, "subSmIssueWidth must be positive")
@@ -49,6 +51,7 @@ case class SmConfig(
 
   val schedulerCount: Int = subSmCount
   val cudaLaneCount: Int = subSmIssueWidth
+  val smIdWidth: Int = log2Up(smCount max 2)
   val residentWarpCount: Int = subSmCount * residentWarpsPerSubSm
   val instructionWidth: Int = 32
   val pcWidth: Int = addressWidth

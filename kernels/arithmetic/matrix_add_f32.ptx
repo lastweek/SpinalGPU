@@ -33,8 +33,8 @@
 // }
 //
 // SpinalGPU note:
-// - The PTX surface now exposes 3D thread builtins, but this teaching kernel still runs
-//   inside a single CTA in the current runtime, so there is no blockIdx-style tiling here.
+// - The PTX surface now exposes real CTA-grid builtins, but this teaching kernel still uses
+//   a single-CTA launch, so there is no blockIdx-style tiling here.
 .version 8.0
 .target spinalgpu
 .address_size 32

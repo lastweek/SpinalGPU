@@ -13,7 +13,7 @@
 // Key model details:
 // - The weights are row-major: one contiguous row per output neuron.
 // - The input vector and bias vector live in global memory and are reused through scalar loads.
-// - `%tid.x` is the output neuron index because the current runtime still launches one CTA.
+// - `%tid.x` is the output neuron index because this teaching launch still uses one CTA.
 // CUDA-equivalent sketch (.cu):
 // __global__ void linear_bias_relu_f32(
 //     const float* weights, const float* input, const float* bias, float* output,

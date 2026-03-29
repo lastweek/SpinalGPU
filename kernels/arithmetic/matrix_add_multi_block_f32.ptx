@@ -1,0 +1,121 @@
+// Purpose: Add two FP32 row-major matrices across multiple CTAs using %ctaid.{x,y} and 2D thread coordinates.
+// Primary feature: floating_point
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Each thread computes its global matrix column from `(%ctaid.x * %ntid.x) + %tid.x`
+//   and its global matrix row from `(%ctaid.y * %ntid.y) + %tid.y`.
+// - Threads that fall outside the runtime `rows x cols` bounds exit without touching memory.
+// - In-bounds threads load `A[row, col]` and `B[row, col]`, add them, and store `C[row, col]`.
+//
+// Where this fits:
+// - This is the first matrix teaching kernel that depends on real CTA-grid scheduling rather
+//   than a single teaching CTA.
+// - It extends the existing matrix-add ladder into a genuine multi-CTA, multi-SM compute case.
+//
+// Key model details:
+// - The corpus launch uses `gridDim=(2,2,1)` and `blockDim=(4,4,1)`, so the grid covers an
+//   `8 x 8` output matrix.
+// - Row-major addressing still uses `row * ld + col`, then `shl.b32` scales the element index
+//   by 4 bytes for FP32 global-memory traffic.
+// - This kernel is still untiled: all operands live in global memory, and CTA cooperation is
+//   only through grid decomposition, not shared-memory staging.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void matrix_add_multi_block_f32(
+//     const float* A,
+//     const float* B,
+//     float* C,
+//     unsigned rows,
+//     unsigned cols,
+//     unsigned lda,
+//     unsigned ldb,
+//     unsigned ldc) {
+//   unsigned col = (blockIdx.x * blockDim.x) + threadIdx.x;
+//   unsigned row = (blockIdx.y * blockDim.y) + threadIdx.y;
+//   if (row < rows && col < cols) {
+//     C[row * ldc + col] = A[row * lda + col] + B[row * ldb + col];
+//   }
+// }
+//
+// SpinalGPU note:
+// - This is real multi-CTA execution on the cluster path, but it is still matrix v1:
+//   one resident CTA per SM, no shared-memory tiling, and scalar FP32 CUDA-core arithmetic.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry matrix_add_multi_block_f32(
+    .param .u32 a_ptr_param,
+    .param .u32 b_ptr_param,
+    .param .u32 c_ptr_param,
+    .param .u32 rows_param,
+    .param .u32 cols_param,
+    .param .u32 lda_param,
+    .param .u32 ldb_param,
+    .param .u32 ldc_param
+)
+{
+    .reg .u32 %r<23>;
+    .reg .f32 %f<3>;
+    .pred %p<2>;
+
+    // Setup
+    // Load the three matrix base pointers, the runtime matrix shape, the row-major strides,
+    // and the CTA-local/global coordinate inputs.
+    ld.param.u32 %r0, [a_ptr_param];
+    ld.param.u32 %r1, [b_ptr_param];
+    ld.param.u32 %r2, [c_ptr_param];
+    ld.param.u32 %r3, [rows_param];
+    ld.param.u32 %r4, [cols_param];
+    ld.param.u32 %r5, [lda_param];
+    ld.param.u32 %r6, [ldb_param];
+    ld.param.u32 %r7, [ldc_param];
+    mov.u32 %r8, %tid.x;
+    mov.u32 %r9, %tid.y;
+    mov.u32 %r10, %ctaid.x;
+    mov.u32 %r11, %ctaid.y;
+    mov.u32 %r12, %ntid.x;
+    mov.u32 %r13, %ntid.y;
+
+    // Core
+    // Convert CTA coordinates plus thread coordinates into global matrix coordinates.
+    mul.lo.u32 %r14, %r10, %r12;
+    add.u32 %r16, %r14, %r8;
+    mul.lo.u32 %r15, %r11, %r13;
+    add.u32 %r17, %r15, %r9;
+
+    // Threads outside the matrix bounds exit immediately.
+    setp.lt.u32 %p0, %r17, %r3;
+    @!%p0 bra done;
+    setp.lt.u32 %p1, %r16, %r4;
+    @!%p1 bra done;
+
+    // Form A[row, col] as a row-major byte address.
+    mul.lo.u32 %r18, %r17, %r5;
+    add.u32 %r18, %r18, %r16;
+    shl.b32 %r19, %r18, 2;
+    add.u32 %r20, %r0, %r19;
+
+    // Form B[row, col] as a row-major byte address.
+    mul.lo.u32 %r18, %r17, %r6;
+    add.u32 %r18, %r18, %r16;
+    shl.b32 %r19, %r18, 2;
+    add.u32 %r21, %r1, %r19;
+
+    // Form C[row, col] as a row-major byte address.
+    mul.lo.u32 %r18, %r17, %r7;
+    add.u32 %r18, %r18, %r16;
+    shl.b32 %r19, %r18, 2;
+    add.u32 %r22, %r2, %r19;
+
+    // Load the two FP32 operands, add them on the CUDA-core path, and store the result.
+    ld.global.f32 %f0, [%r20];
+    ld.global.f32 %f1, [%r21];
+    add.f32 %f2, %f0, %f1;
+    st.global.f32 [%r22], %f2;
+
+    // Exit
+done:
+    ret;
+}

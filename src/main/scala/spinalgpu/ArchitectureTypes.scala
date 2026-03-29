@@ -27,6 +27,23 @@ case class KernelCommandDesc(config: SmConfig) extends Bundle {
   val sharedBytes = UInt(config.sharedBytesWidth bits)
 }
 
+case class CtaCommandDesc(config: SmConfig) extends Bundle {
+  val entryPc = UInt(config.addressWidth bits)
+  val gridDimX = UInt(config.dataWidth bits)
+  val gridDimY = UInt(config.dataWidth bits)
+  val gridDimZ = UInt(config.dataWidth bits)
+  val blockDimX = UInt(config.threadCountWidth bits)
+  val blockDimY = UInt(config.threadCountWidth bits)
+  val blockDimZ = UInt(config.threadCountWidth bits)
+  val argBase = UInt(config.addressWidth bits)
+  val sharedBytes = UInt(config.sharedBytesWidth bits)
+  val ctaidX = UInt(config.dataWidth bits)
+  val ctaidY = UInt(config.dataWidth bits)
+  val ctaidZ = UInt(config.dataWidth bits)
+  val smId = UInt(config.smIdWidth bits)
+  val gridId = UInt(64 bits)
+}
+
 case class WarpContext(config: SmConfig) extends Bundle {
   val valid = Bool()
   val runnable = Bool()

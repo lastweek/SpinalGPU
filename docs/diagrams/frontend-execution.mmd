@@ -1,20 +1,20 @@
 flowchart LR
   HOST[Host Test Harness]
+  PTX[PTX Subset Source]
+  TOOLCHAIN[PtxAssembler]
+  BIN[SpinalGPU Machine Code]
   CSR[AXI-Lite Control]
   GPU[GpuTop]
   HCB[HostControlBlock]
-  SAC[SmAdmissionController]
-  WST[WarpStateTable]
-  BINDER[WarpBinder]
-  SUBS[4 x SubSmPartition]
-  L0I[4 x L0 Instruction Cache]
-  L1I[L1InstructionCache]
-  L1D[L1DataSharedMemory]
+  CLUSTER[GpuCluster]
+  GRID[GridDispatchController]
+  CTA[SmCtaController x SM]
+  SM[SmExecutionCore x SM]
+  SUBS[SubSmPartition x subSM]
   MEM[Unified External Memory]
 
+  PTX --> TOOLCHAIN --> BIN --> MEM
   HOST --> CSR --> GPU
-  GPU --> HCB --> SAC --> WST
-  WST --> BINDER --> SUBS
-  SUBS --> L0I --> L1I --> MEM
-  SUBS --> L1D --> MEM
-  SUBS --> WST
+  GPU --> HCB --> CLUSTER
+  CLUSTER --> GRID --> CTA --> SM --> SUBS
+  SUBS --> MEM

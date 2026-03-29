@@ -1,0 +1,78 @@
+// Purpose: Store each CTA's %ctaid.{x,y,z} and %nctaid.{x,y,z} to global memory.
+// Primary feature: special_registers
+// Expected outcome: success
+//
+// High-level execution flow:
+// - One thread per CTA reads the current CTA coordinates and the grid dimensions.
+// - It linearizes the 3D CTA coordinate into one output record index.
+// - It stores six words per CTA: ctaid.x, ctaid.y, ctaid.z, nctaid.x, nctaid.y, nctaid.z.
+//
+// Where this fits:
+// - This is the direct teaching kernel for real multi-CTA grid scheduling.
+// - It proves that %ctaid and %nctaid are no longer collapsed to constants once the
+//   cluster dispatcher starts walking a real grid.
+//
+// Key model details:
+// - The launch uses blockDim=(1,1,1), so each CTA contributes exactly one output record.
+// - CTA records are laid out in x-major order: x changes fastest, then y, then z.
+// - Each record is 24 bytes because it stores six 32-bit words.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void block_id_store(unsigned* out) {
+//   unsigned linear = blockIdx.x +
+//                     gridDim.x * (blockIdx.y + (gridDim.y * blockIdx.z));
+//   unsigned* record = out + (linear * 6);
+//   record[0] = blockIdx.x;
+//   record[1] = blockIdx.y;
+//   record[2] = blockIdx.z;
+//   record[3] = gridDim.x;
+//   record[4] = gridDim.y;
+//   record[5] = gridDim.z;
+// }
+//
+// SpinalGPU note:
+// - This kernel is intentionally one-thread-per-CTA so the visible output isolates CTA
+//   scheduling rather than per-thread indexing inside a block.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry block_id_store(
+    .param .u32 out_ptr_param
+)
+{
+    .reg .u32 %r<18>;
+
+    // Setup
+    // Load the output base pointer and capture the CTA and grid coordinates.
+    ld.param.u32 %r0, [out_ptr_param];
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    mov.u32 %r3, %ctaid.z;
+    mov.u32 %r4, %nctaid.x;
+    mov.u32 %r5, %nctaid.y;
+    mov.u32 %r6, %nctaid.z;
+
+    // Core
+    // Linearize the 3D CTA coordinate with x as the fastest-changing dimension.
+    mul.lo.u32 %r7, %r3, %r5;
+    add.u32 %r8, %r7, %r2;
+    mul.lo.u32 %r9, %r8, %r4;
+    add.u32 %r10, %r9, %r1;
+
+    // Convert the CTA record index into a byte offset: 6 words == 24 bytes.
+    mov.u32 %r11, 24;
+    mul.lo.u32 %r12, %r10, %r11;
+    add.u32 %r13, %r0, %r12;
+
+    // Store one six-word record for this CTA.
+    st.global.u32 [%r13 + 0], %r1;
+    st.global.u32 [%r13 + 4], %r2;
+    st.global.u32 [%r13 + 8], %r3;
+    st.global.u32 [%r13 + 12], %r4;
+    st.global.u32 [%r13 + 16], %r5;
+    st.global.u32 [%r13 + 20], %r6;
+
+    // Exit
+    ret;
+}

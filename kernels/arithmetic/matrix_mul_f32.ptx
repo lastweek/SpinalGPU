@@ -37,8 +37,8 @@
 // }
 //
 // SpinalGPU note:
-// - The PTX surface now exposes 3D thread builtins, but the current runtime still launches
-//   one CTA for this teaching kernel, so the flow relies only on thread coordinates here.
+// - The PTX surface now exposes real CTA-grid builtins, but this teaching kernel still uses
+//   one CTA, so the flow relies only on thread coordinates here.
 .version 8.0
 .target spinalgpu
 .address_size 32
