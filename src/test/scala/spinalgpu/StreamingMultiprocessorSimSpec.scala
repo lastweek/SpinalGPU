@@ -4,6 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
+import spinalgpu.toolchain.KernelCorpus
 
 abstract class StreamingMultiprocessorSingleSimSpec extends AnyFunSuite with Matchers {
   protected val config: GpuConfig = GpuConfig.default
@@ -44,7 +45,7 @@ abstract class StreamingMultiprocessorSingleSimSpec extends AnyFunSuite with Mat
   }
 }
 
-class StreamingMultiprocessorAdmissionSpec extends StreamingMultiprocessorSingleSimSpec {
+class StreamingMultiprocessorWrapperSpec extends StreamingMultiprocessorKernelIntegrationSpec {
   test("SM admission controller initializes warp contexts and schedules multiple warps") {
     withStreamingMultiprocessorSimulation("admission") { dut =>
       dut.clockDomain.forkStimulus(period = 10)
@@ -95,9 +96,7 @@ class StreamingMultiprocessorAdmissionSpec extends StreamingMultiprocessorSingle
       memory.stop()
     }
   }
-}
 
-class StreamingMultiprocessorIllegalOpcodeSpec extends StreamingMultiprocessorSingleSimSpec {
   test("illegal opcode traps and latches fault status") {
     withStreamingMultiprocessorSimulation("illegal-opcode") { dut =>
       dut.clockDomain.forkStimulus(period = 10)
@@ -135,9 +134,7 @@ class StreamingMultiprocessorIllegalOpcodeSpec extends StreamingMultiprocessorSi
       memory.stop()
     }
   }
-}
 
-class StreamingMultiprocessorMisalignedFetchSpec extends StreamingMultiprocessorSingleSimSpec {
   test("misaligned fetch traps and latches fault status") {
     withStreamingMultiprocessorSimulation("misaligned-fetch") { dut =>
       dut.clockDomain.forkStimulus(period = 10)
@@ -172,6 +169,42 @@ class StreamingMultiprocessorMisalignedFetchSpec extends StreamingMultiprocessor
       dut.io.command.executionStatus.faultCode.toBigInt shouldBe FaultCode.MisalignedFetch
 
       memory.stop()
+    }
+  }
+
+  test("add_store_exit waits for the delayed external store response before asserting done") {
+    val kernel = KernelCorpus.addStoreExit
+
+    withLaunchedKernelCase(
+      kernel,
+      memoryConfig = AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 32)
+    ) { (dut, memory) =>
+      var lsuExternalRequestCount = 0
+      var cycles = 0
+
+      while (lsuExternalRequestCount < 2 && cycles < kernel.timeoutCycles) {
+        if (dut.io.debug.lsuExternalReqValid.toBoolean && dut.io.debug.lsuExternalReqReady.toBoolean) {
+          lsuExternalRequestCount += 1
+        }
+        dut.clockDomain.waitSampling()
+        cycles += 1
+      }
+
+      assert(
+        lsuExternalRequestCount >= 2,
+        s"${kernel.name} never issued the delayed external store after $cycles cycles"
+      )
+
+      for (_ <- 0 until 31) {
+        dut.io.command.executionStatus.done.toBoolean shouldBe false
+        dut.clockDomain.waitSampling()
+      }
+
+      waitUntil(dut, timeoutCycles = kernel.timeoutCycles, label = s"${kernel.name} completion after delayed drain") {
+        dut.io.command.executionStatus.done.toBoolean
+      }
+      dut.io.command.executionStatus.fault.toBoolean shouldBe false
+      assertKernelSuccess(memory, kernel)
     }
   }
 }

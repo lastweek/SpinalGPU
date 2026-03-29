@@ -1,5 +1,6 @@
 package spinalgpu
 
+import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
@@ -74,6 +75,9 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
     (fault, faultCode, faultPc)
   }
 
+  protected def runGpuTopKernelCase(kernel: KernelCorpus.KernelCase): Unit =
+    KernelCorpusTestUtils.runGpuTopKernelCase(kernel, config)
+
   protected def runGpuTopKernelCaseWithoutHarnessGate(kernel: KernelCorpus.KernelCase): Unit = {
     val gpuTopKernels = KernelCorpus.gpuTopCases :+ KernelCorpus.linearBiasReluF32
     val index = gpuTopKernels.indexWhere(_.name == kernel.name)
@@ -107,56 +111,8 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
       memory.stop()
     }
   }
-}
 
-abstract class MultiSmExecutionFrontendGpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  override protected val config: GpuConfig = KernelCorpus.multiSmRegressionConfig
-}
-
-class MatrixAddF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("matrix_add_f32 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixAddF32, config)
-  }
-}
-
-class VectorAddF32x4GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("vector_add_f32x4 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.vectorAddF32x4, config)
-  }
-}
-
-class MatrixMulF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("matrix_mul_f32 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixMulF32, config)
-  }
-}
-
-class MatrixMulF16AccumF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("matrix_mul_f16_accum_f32 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixMulF16AccumF32, config)
-  }
-}
-
-class VectorAddE4m3x2GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("vector_add_e4m3x2 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.vectorAddE4m3x2, config)
-  }
-}
-
-class MatrixMulE5m2x2AccumF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("matrix_mul_e5m2x2_accum_f32 executes through GpuTop") {
-    KernelCorpusTestUtils.runGpuTopKernelCase(KernelCorpus.matrixMulE5m2x2AccumF32, config)
-  }
-}
-
-class LinearBiasReluF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("linear_bias_relu_f32 executes through GpuTop") {
-    runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.linearBiasReluF32)
-  }
-}
-
-class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  test("grid_id_store increments across successive GpuTop command submissions") {
+  protected def runGridIdStoreSuccessiveSubmissionCase(): Unit = {
     val kernel = KernelCorpus.gridIdStore
 
     withGpuTopSimulation("grid_id_store successive submissions") { dut =>
@@ -197,10 +153,49 @@ class GridIdStoreGpuTopSpec extends ExecutionFrontendGpuTopSpec {
   }
 }
 
+abstract class MultiSmExecutionFrontendGpuTopSpec extends ExecutionFrontendGpuTopSpec {
+  override protected val config: GpuConfig = KernelCorpus.multiSmRegressionConfig
+}
+
+class GpuTopFullSpec extends ExecutionFrontendGpuTopSpec {
+  KernelCorpus.gpuTopCases.foreach { kernel =>
+    test(s"${kernel.name} executes through GpuTop") {
+      runGpuTopKernelCase(kernel)
+    }
+  }
+
+  test("linear_bias_relu_f32 executes through GpuTop") {
+    runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.linearBiasReluF32)
+  }
+
+  test("grid_id_store increments across successive GpuTop command submissions") {
+    runGridIdStoreSuccessiveSubmissionCase()
+  }
+}
+
+@DoNotDiscover
+class GpuTopSmokeSpec extends ExecutionFrontendGpuTopSpec {
+  test("matrix_add_f32 executes through GpuTop") {
+    runGpuTopKernelCase(KernelCorpus.matrixAddF32)
+  }
+
+  test("vector_add_f32x4 executes through GpuTop") {
+    runGpuTopKernelCase(KernelCorpus.vectorAddF32x4)
+  }
+
+  test("linear_bias_relu_f32 executes through GpuTop") {
+    runGpuTopKernelCaseWithoutHarnessGate(KernelCorpus.linearBiasReluF32)
+  }
+
+  test("grid_id_store increments across successive GpuTop command submissions") {
+    runGridIdStoreSuccessiveSubmissionCase()
+  }
+}
+
 class MultiSmGpuTopSpec extends MultiSmExecutionFrontendGpuTopSpec {
   KernelCorpus.multiSmGpuTopCases.foreach { kernel =>
     test(s"${kernel.name} executes through GpuTop with curated multi-SM coverage") {
-      KernelCorpusTestUtils.runGpuTopKernelCase(kernel, config)
+      runGpuTopKernelCase(kernel)
     }
   }
 }

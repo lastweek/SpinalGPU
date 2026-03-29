@@ -1,124 +1,34 @@
 package spinalgpu
 
+import org.scalatest.DoNotDiscover
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import spinalgpu.toolchain.KernelCorpus
 
-abstract class StreamingMultiprocessorKernelCaseSpec(kernel: KernelCorpus.KernelCase) extends AnyFunSuite with Matchers {
+abstract class StreamingMultiprocessorKernelSuite(kernels: Seq[KernelCorpus.KernelCase]) extends AnyFunSuite with Matchers {
   private val config = GpuConfig.default
 
-  test(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
-    KernelCorpusTestUtils.runStreamingMultiprocessorKernelCase(kernel, config)
+  kernels.foreach { kernel =>
+    test(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
+      KernelCorpusTestUtils.runStreamingMultiprocessorKernelCase(kernel, config)
+    }
   }
 }
 
-class AddStoreExitStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.addStoreExit)
+class StreamingMultiprocessorCorpusFullSpec
+    extends StreamingMultiprocessorKernelSuite(KernelCorpus.streamingMultiprocessorCases)
 
-class ThreadIdStoreStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.threadIdStore)
-
-class ThreadIdStore256StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.threadIdStore256)
-
-class BasicSpecialRegisterStoreStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.basicSpecialRegisterStore)
-
-class GridIdStoreStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.gridIdStore)
-
-class UniformLoopStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.uniformLoop)
-
-class SharedRoundtripStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.sharedRoundtrip)
-
-class VectorAdd1WarpStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAdd1Warp)
-
-class VectorLoadStoreF32x2StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorLoadStoreF32x2)
-
-class VectorLoadStoreF32x4StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorLoadStoreF32x4)
-
-class VectorAddF32x4StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddF32x4)
-
-class MatrixCopyF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixCopyF32)
-
-class MatrixTransposeF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixTransposeF32)
-
-class MatrixAddF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixAddF32)
-
-class MatrixMulF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulF32)
-
-class ScalarAddF16StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarAddF16)
-
-class VectorAddF16x2StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddF16x2)
-
-class MatrixAddF16StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixAddF16)
-
-class MatrixMulF16AccumF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulF16AccumF32)
-
-class ScalarConvertE4m3x2F16x2StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarConvertE4m3x2F16x2)
-
-class ScalarConvertE5m2x2F16x2StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarConvertE5m2x2F16x2)
-
-class VectorAddE4m3x2StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddE4m3x2)
-
-class VectorAddE5m2x2StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.vectorAddE5m2x2)
-
-class MatrixMulE4m3x2AccumF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulE4m3x2AccumF32)
-
-class MatrixMulE5m2x2AccumF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.matrixMulE5m2x2AccumF32)
-
-class ReluClampF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.reluClampF32)
-
-class LinearBiasReluF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.linearBiasReluF32)
-
-class HingeStepF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.hingeStepF32)
-
-class BitopsPackU32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.bitopsPackU32)
-
-class ScalarUnaryF32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarUnaryF32)
-
-class ScalarMinS32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarMinS32)
-
-class ScalarMadU32StreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.scalarMadU32)
-
-class RegisterStressStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.registerStress)
-
-class WarpidStallIsolationStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.warpidStallIsolation)
-
-class NonUniformBranchStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.nonUniformBranch)
-
-class MisalignedStoreStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.misalignedStore)
-
-class TrapStreamingMultiprocessorSpec
-    extends StreamingMultiprocessorKernelCaseSpec(KernelCorpus.trap)
+@DoNotDiscover
+class StreamingMultiprocessorCorpusSmokeSpec
+    extends StreamingMultiprocessorKernelSuite(
+      Seq(
+        KernelCorpus.addStoreExit,
+        KernelCorpus.threadIdStore,
+        KernelCorpus.sharedRoundtrip,
+        KernelCorpus.vectorAddF32x4,
+        KernelCorpus.matrixAddF32,
+        KernelCorpus.scalarAddF16,
+        KernelCorpus.vectorAddE4m3x2,
+        KernelCorpus.trap
+      )
+    )

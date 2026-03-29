@@ -22,11 +22,20 @@ export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 From the repository root:
 
 ```bash
-./scripts/build-kernels.sh
 sbt compile
+sbt devTest
+sbt refreshKernels
+sbt smokeTest
+sbt multiSmSmoke
 sbt test
 sbt run
 ```
+
+- `sbt devTest`: fast structural, unit, and controller regression loop; does not rebuild the kernel corpus
+- `sbt refreshKernels`: rebuilds `generated/kernels/**` from `kernels/**/*.ptx`
+- `sbt smokeTest`: curated SM and `GpuTop` execution smoke suite; does not rebuild the kernel corpus
+- `sbt multiSmSmoke`: curated multi-SM `GpuTop(smCount = 2)` smoke suite; does not rebuild the kernel corpus
+- `sbt test`: full regression and automatic kernel-corpus rebuild
 
 ## Quick Scripts
 
@@ -41,9 +50,9 @@ Use the small wrappers in `scripts/` for the common inner loop:
 ```
 
 - `./scripts/build-kernels.sh`: compiles `kernels/**/*.ptx` into raw `.bin` files under `generated/kernels`
-- `./scripts/test-fast.sh`: runs the default smoke spec `spinalgpu.GpuTopSimSpec`
+- `./scripts/test-fast.sh`: rebuilds kernels and runs the default `sbt smokeTest` workflow
 - `./scripts/test-fast.sh spinalgpu.SomeOtherSpec`: runs one specific test spec
-- `./scripts/test-watch.sh`: reruns the default smoke spec whenever sources change
+- `./scripts/test-watch.sh`: reruns the default `sbt smokeTest` workflow whenever sources change
 - `./scripts/gen-verilog.sh`: regenerates Verilog into `generated/verilog`
 - `./scripts/check.sh`: runs the full `compile -> test -> run` contract
 
@@ -80,10 +89,12 @@ Use the small wrappers in `scripts/` for the common inner loop:
 - The current harness split is:
   - `GpuTop`: AXI-Lite/AXI boundary smoke
   - `StreamingMultiprocessor`: full externalized kernel corpus
-  - `ExecutionFrontendSimSpec`: experimental top-level kernel smoke, kept out of the default regression set because the current AXI-Lite launch path is not yet stable enough for deterministic CI
+  - `ExecutionFrontendSimSpec`: grouped top-level kernel suites for full, smoke, and multi-SM execution coverage
 - Recommended flow:
-  - build binaries with `./scripts/build-kernels.sh`
-  - run simulation tests against the generated `.bin` artifacts
+  - use `sbt devTest` for fast non-execution iteration
+  - use `sbt refreshKernels` after PTX or PTX-toolchain changes
+  - use `sbt smokeTest` and `sbt multiSmSmoke` for curated execution checks
+  - use `sbt test` for the full regression contract
 
 ## PTX File Template
 
@@ -102,7 +113,11 @@ Each teaching kernel follows one strict file template:
 ## What Each Command Does
 
 - `sbt compile` resolves dependencies and compiles the SpinalHDL sources plus the PTX toolchain.
-- `sbt test` rebuilds the PTX kernel corpus and then runs the architecture skeleton tests and the `SpinalSim` integration checks.
+- `sbt devTest` runs the fast structural, unit, and controller suites without rebuilding the kernel corpus.
+- `sbt refreshKernels` rebuilds the PTX kernel corpus under `generated/kernels`.
+- `sbt smokeTest` runs the curated SM and `GpuTop` execution smoke suites without rebuilding the kernel corpus.
+- `sbt multiSmSmoke` runs the curated multi-SM `GpuTop` smoke suite without rebuilding the kernel corpus.
+- `sbt test` rebuilds the PTX kernel corpus and then runs the full regression suite.
 - `sbt run` elaborates `GpuTop` and emits Verilog into `generated/verilog`.
 
 ## Project Layout
@@ -115,8 +130,9 @@ Each teaching kernel follows one strict file template:
 - `src/main/scala/spinalgpu/toolchain/BuildKernelCorpus.scala`: batch compiler for the kernel corpus.
 - `src/main/scala/spinalgpu/toolchain/KernelCorpus.scala`: single declarative kernel corpus definition for source paths, launch config, preload image, and expectations.
 - `src/test/scala/spinalgpu/GpuTopSimSpec.scala`: top-level `SpinalSim` smoke test with AXI memory and AXI-Lite control.
-- `src/test/scala/spinalgpu/ExecutionFrontendSimSpec.scala`: experimental top-level `GpuTop` kernel-launch smoke, currently ignored in the default regression set.
-- `src/test/scala/spinalgpu/StreamingMultiprocessorSimSpec.scala`: generated corpus-backed SM execution tests plus low-level launch/fetch frontend checks.
+- `src/test/scala/spinalgpu/ExecutionFrontendSimSpec.scala`: grouped `GpuTop` full, smoke, and multi-SM execution suites.
+- `src/test/scala/spinalgpu/StreamingMultiprocessorSimSpec.scala`: grouped SM wrapper integration suite for launch, trap, and delayed-drain behavior.
+- `src/test/scala/spinalgpu/StreamingMultiprocessorKernelCorpusSpec.scala`: grouped full and smoke kernel-corpus SM execution suites.
 - `src/test/scala/spinalgpu/KernelCorpusTestUtils.scala`: shared preload, launch, and assertion helpers for corpus-backed simulation specs.
 - `src/test/scala/spinalgpu/KernelCorpusSpec.scala`: integrity test that keeps `kernels/` and the declarative corpus in sync.
 - `src/test/scala/spinalgpu/IsaSpec.scala`: machine-encoding encoder, decoder, and disassembler tests.

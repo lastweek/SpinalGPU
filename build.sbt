@@ -31,18 +31,6 @@ lazy val root = (project in file("."))
       "-XX:ReservedCodeCacheSize=128m"
     ),
     Test / parallelExecution := false,
-    Test / testGrouping := {
-      val options = ForkOptions()
-        .withRunJVMOptions((Test / javaOptions).value.toVector)
-        .withWorkingDirectory(baseDirectory.value)
-      (Test / definedTests).value.map { test =>
-        Tests.Group(
-          name = test.name,
-          tests = Seq(test),
-          runPolicy = Tests.SubProcess(options)
-        )
-      }
-    },
     buildKernelCorpus := Def.taskDyn {
       (Compile / runMain).toTask(" spinalgpu.toolchain.BuildKernelCorpus")
     }.value,
@@ -50,3 +38,9 @@ lazy val root = (project in file("."))
   )
 
 fork := true
+
+addCommandAlias("refreshKernels", "runMain spinalgpu.toolchain.BuildKernelCorpus")
+addCommandAlias("devTest", "Test / runMain org.scalatest.tools.Runner -o -s spinalgpu.DevRegressionSpec")
+addCommandAlias("smokeTest", "Test / runMain org.scalatest.tools.Runner -o -s spinalgpu.ExecutionSmokeSpec")
+addCommandAlias("multiSmSmoke", "testOnly spinalgpu.MultiSmGpuTopSpec")
+addCommandAlias("fullTest", "test")

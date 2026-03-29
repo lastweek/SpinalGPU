@@ -35,6 +35,11 @@ This repository is an architecture-first educational GPU project in SpinalHDL. F
   - focused module simulation tests
   - top-level integration or smoke simulation tests
 - Test protocol behavior, not just payload values: ready/valid, blocking, routing, and idle behavior matter.
+- Prefer the fast local workflow during development:
+  - `sbt devTest` for structural/unit/controller work
+  - `sbt refreshKernels` after PTX or PTX-toolchain changes
+  - `sbt smokeTest` for curated execution coverage
+  - `sbt multiSmSmoke` when touching cluster/runtime scheduling
 - Keep the default repo contract green:
   - `sbt compile`
   - `sbt test`

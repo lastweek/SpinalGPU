@@ -4,12 +4,16 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
-SPEC="${1:-spinalgpu.GpuTopSimSpec}"
+SPEC="${1:-}"
 
 require_cmd sbt
 require_cmd verilator
 
 (
   cd "${REPO_ROOT}"
-  sbt "~testOnly ${SPEC}"
+  if [[ -z "${SPEC}" ]]; then
+    sbt "~smokeTest"
+  else
+    sbt "~testOnly ${SPEC}"
+  fi
 )
