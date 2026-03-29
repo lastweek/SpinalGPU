@@ -4,7 +4,7 @@ import spinal.core._
 
 object GridCoordinateLogic {
   def increment(
-      config: SmConfig,
+      config: GpuConfig,
       x: UInt,
       y: UInt,
       z: UInt,

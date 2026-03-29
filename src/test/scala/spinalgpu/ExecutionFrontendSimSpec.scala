@@ -8,7 +8,7 @@ import spinal.lib.bus.amba4.axilite.AxiLite4
 import spinalgpu.toolchain.KernelCorpus
 
 abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
-  protected val config: SmConfig = SmConfig.default
+  protected val config: GpuConfig = GpuConfig.default
 
   protected def withGpuTopSimulation(label: String)(body: GpuTop => Unit): Unit = {
     println(s"[progress][gputop-integration] $label start")
@@ -110,7 +110,7 @@ abstract class ExecutionFrontendGpuTopSpec extends AnyFunSuite with Matchers {
 }
 
 abstract class MultiSmExecutionFrontendGpuTopSpec extends ExecutionFrontendGpuTopSpec {
-  override protected val config: SmConfig = KernelCorpus.multiSmRegressionConfig
+  override protected val config: GpuConfig = KernelCorpus.multiSmRegressionConfig
 }
 
 class MatrixAddF32GpuTopSpec extends ExecutionFrontendGpuTopSpec {
@@ -208,7 +208,7 @@ class MultiSmGpuTopSpec extends MultiSmExecutionFrontendGpuTopSpec {
 class ExecutionFrontendSuiteContractSpec extends AnyFunSuite with Matchers {
   KernelCorpus.gpuTopCases.foreach { kernel =>
     ignore(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
-      KernelCorpusTestUtils.runGpuTopKernelCase(kernel, SmConfig.default)
+      KernelCorpusTestUtils.runGpuTopKernelCase(kernel, GpuConfig.default)
     }
   }
 

@@ -8,26 +8,31 @@ object GenerateGpuTop extends App {
   private val targetDir = Path.of("generated/verilog")
   private val config =
     args.toList match {
-      case Nil => SmConfig.default
+      case Nil => GpuConfig.default
       case List(smCount, subSmCount, residentWarpsPerSubSm, subSmIssueWidth, sharedMemoryBytes) =>
-        SmConfig(
-          smCount = smCount.toInt,
-          subSmCount = subSmCount.toInt,
-          residentWarpsPerSubSm = residentWarpsPerSubSm.toInt,
-          subSmIssueWidth = subSmIssueWidth.toInt,
-          sharedMemoryBytes = sharedMemoryBytes.toInt
+        GpuConfig(
+          cluster = GpuClusterConfig(smCount = smCount.toInt),
+          sm = SmConfig(
+            subSmCount = subSmCount.toInt,
+            residentWarpsPerSubSm = residentWarpsPerSubSm.toInt,
+            subSmIssueWidth = subSmIssueWidth.toInt,
+            sharedMemoryBytes = sharedMemoryBytes.toInt
+          )
         )
       case List(subSmCount, residentWarpsPerSubSm, subSmIssueWidth, sharedMemoryBytes) =>
-        SmConfig(
-          subSmCount = subSmCount.toInt,
-          residentWarpsPerSubSm = residentWarpsPerSubSm.toInt,
-          subSmIssueWidth = subSmIssueWidth.toInt,
-          sharedMemoryBytes = sharedMemoryBytes.toInt
+        GpuConfig(
+          sm = SmConfig(
+            subSmCount = subSmCount.toInt,
+            residentWarpsPerSubSm = residentWarpsPerSubSm.toInt,
+            subSmIssueWidth = subSmIssueWidth.toInt,
+            sharedMemoryBytes = sharedMemoryBytes.toInt
+          )
         )
       case _ =>
         sys.error(
           "usage: GenerateGpuTop [smCount subSmCount residentWarpsPerSubSm subSmIssueWidth sharedMemoryBytes] " +
-            "or GenerateGpuTop [subSmCount residentWarpsPerSubSm subSmIssueWidth sharedMemoryBytes]"
+            "or GenerateGpuTop [subSmCount residentWarpsPerSubSm subSmIssueWidth sharedMemoryBytes]; " +
+            "the first form overrides GpuConfig.cluster.smCount and the second keeps the default single-SM GpuConfig"
         )
     }
 

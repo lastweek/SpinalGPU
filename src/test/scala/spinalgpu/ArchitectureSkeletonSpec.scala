@@ -9,9 +9,9 @@ import spinal.core._
 class ArchitectureSkeletonSpec extends AnyFunSuite with Matchers {
   test("GpuTop elaborates across three SM configurations") {
     val configs = Seq(
-      SmConfig.default,
-      SmConfig(subSmCount = 1, residentWarpsPerSubSm = 1, subSmIssueWidth = 32, sharedMemoryBytes = 2048),
-      SmConfig(subSmCount = 2, residentWarpsPerSubSm = 2, subSmIssueWidth = 32, sharedMemoryBytes = 8192)
+      GpuConfig.default,
+      GpuConfig(sm = SmConfig(subSmCount = 1, residentWarpsPerSubSm = 1, subSmIssueWidth = 32, sharedMemoryBytes = 2048)),
+      GpuConfig(sm = SmConfig(subSmCount = 2, residentWarpsPerSubSm = 2, subSmIssueWidth = 32, sharedMemoryBytes = 8192))
     )
 
     configs.zipWithIndex.foreach { case (config, index) =>
@@ -20,6 +20,14 @@ class ArchitectureSkeletonSpec extends AnyFunSuite with Matchers {
         SpinalConfig(targetDirectory = targetDir).generateVerilog(new GpuTop(config))
       }
     }
+  }
+
+  test("StreamingMultiprocessor rejects non-single-SM configs") {
+    val thrown = the[IllegalArgumentException] thrownBy {
+      SpinalConfig(targetDirectory = "target/elaboration/streaming-multiprocessor-invalid-cluster")
+        .generateVerilog(new StreamingMultiprocessor(GpuConfig.default.copy(cluster = GpuClusterConfig(smCount = 2))))
+    }
+    thrown.getMessage should include("single-SM compatibility wrapper")
   }
 
   test("architecture docs, diagrams, and README links exist") {

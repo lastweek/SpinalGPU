@@ -74,28 +74,28 @@ class StreamingMultiprocessorPartitionActivationSpec extends StreamingMultiproce
       kernel,
       memoryConfig = AxiMemorySimConfig(readResponseDelay = 8, writeResponseDelay = 8)
     ) { (dut, memory) =>
-      val sawSubSmOccupied = Array.fill(config.subSmCount)(false)
-      val sawSubSmFull = Array.fill(config.subSmCount)(false)
-      val sawSubSmActive = Array.fill(config.subSmCount)(false)
+      val sawSubSmOccupied = Array.fill(config.sm.subSmCount)(false)
+      val sawSubSmFull = Array.fill(config.sm.subSmCount)(false)
+      val sawSubSmActive = Array.fill(config.sm.subSmCount)(false)
       val observedWarpIds = mutable.Set.empty[Int]
 
       var cycles = 0
       while (!dut.io.command.executionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
-        for (subSm <- 0 until config.subSmCount) {
+        for (subSm <- 0 until config.sm.subSmCount) {
           val occupiedBits = dut.io.debug.subSmSlotOccupied(subSm).toBigInt.toInt
           val occupiedCount = java.lang.Integer.bitCount(occupiedBits)
 
           if (occupiedCount > 0) {
             sawSubSmOccupied(subSm) = true
           }
-          if (occupiedCount == config.residentWarpsPerSubSm) {
+          if (occupiedCount == config.sm.residentWarpsPerSubSm) {
             sawSubSmFull(subSm) = true
           }
           if (dut.io.debug.subSmEngineStates(subSm).toBigInt != 0) {
             sawSubSmActive(subSm) = true
           }
 
-          for (slot <- 0 until config.residentWarpsPerSubSm) {
+          for (slot <- 0 until config.sm.residentWarpsPerSubSm) {
             if (((occupiedBits >> slot) & 0x1) != 0) {
               observedWarpIds += dut.io.debug.subSmBoundWarpIds(subSm)(slot).toBigInt.toInt
             }
@@ -114,7 +114,7 @@ class StreamingMultiprocessorPartitionActivationSpec extends StreamingMultiproce
       sawSubSmOccupied.foreach(_ shouldBe true)
       sawSubSmFull.foreach(_ shouldBe true)
       sawSubSmActive.foreach(_ shouldBe true)
-      observedWarpIds shouldBe (0 until config.residentWarpCount).toSet
+      observedWarpIds shouldBe (0 until config.sm.residentWarpCount).toSet
       assertKernelSuccess(memory, kernel)
     }
   }

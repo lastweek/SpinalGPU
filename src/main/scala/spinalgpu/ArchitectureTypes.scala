@@ -15,7 +15,7 @@ object MemoryAccessWidthKind extends SpinalEnum {
   val HALFWORD, WORD = newElement()
 }
 
-case class KernelCommandDesc(config: SmConfig) extends Bundle {
+case class KernelCommandDesc(config: GpuConfig) extends Bundle {
   val entryPc = UInt(config.addressWidth bits)
   val gridDimX = UInt(config.dataWidth bits)
   val gridDimY = UInt(config.dataWidth bits)
@@ -40,7 +40,8 @@ case class CtaCommandDesc(config: SmConfig) extends Bundle {
   val ctaidX = UInt(config.dataWidth bits)
   val ctaidY = UInt(config.dataWidth bits)
   val ctaidZ = UInt(config.dataWidth bits)
-  val smId = UInt(config.smIdWidth bits)
+  val smId = UInt(config.dataWidth bits)
+  val nsmId = UInt(config.dataWidth bits)
   val gridId = UInt(64 bits)
 }
 
@@ -299,7 +300,7 @@ case class ExternalMemBurstRsp(config: SmConfig) extends Bundle {
   val readData = Vec(Bits(config.dataWidth bits), config.cudaLaneCount)
 }
 
-case class KernelExecutionStatus(config: SmConfig) extends Bundle {
+case class KernelExecutionStatus(config: GpuConfig) extends Bundle {
   val busy = Bool()
   val done = Bool()
   val fault = Bool()

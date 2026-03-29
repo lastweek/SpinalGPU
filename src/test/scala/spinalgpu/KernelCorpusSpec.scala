@@ -110,7 +110,7 @@ class KernelCorpusSpec extends AnyFunSuite with Matchers {
 
   test("kernel corpus keeps curated multi-SM GpuTop cases distinct from the default single-SM GpuTop set") {
     KernelCorpus.multiSmGpuTopCases should not be empty
-    KernelCorpus.multiSmRegressionConfig.smCount should be > 1
+    KernelCorpus.multiSmRegressionConfig.cluster.smCount should be > 1
     KernelCorpus.multiSmGpuTopCases.foreach { kernel =>
       kernel.harnessTargets should contain(KernelCorpus.HarnessTarget.GpuTop)
     }

@@ -3,7 +3,9 @@ package spinalgpu
 import spinal.core._
 import spinal.lib._
 
-class GridDispatchController(config: SmConfig) extends Component {
+class GridDispatchController(config: GpuConfig) extends Component {
+  private val smConfig = config.sm
+
   private object State extends SpinalEnum {
     val IDLE, RUNNING = newElement()
   }
@@ -15,7 +17,7 @@ class GridDispatchController(config: SmConfig) extends Component {
     val smExecutionStatus = in(Vec.fill(config.smCount)(KernelExecutionStatus(config)))
     val smStart = out(Bits(config.smCount bits))
     val smClearDone = out(Bits(config.smCount bits))
-    val smCommand = out(Vec.fill(config.smCount)(CtaCommandDesc(config)))
+    val smCommand = out(Vec.fill(config.smCount)(CtaCommandDesc(smConfig)))
     val memoryFabricIdle = in Bool()
     val executionStatus = out(KernelExecutionStatus(config))
     val currentGridId = out(UInt(64 bits))
@@ -85,15 +87,16 @@ class GridDispatchController(config: SmConfig) extends Component {
     io.smCommand(sm).ctaidX := nextCtaX
     io.smCommand(sm).ctaidY := nextCtaY
     io.smCommand(sm).ctaidZ := nextCtaZ
-    io.smCommand(sm).smId := U(sm, config.smIdWidth bits)
+    io.smCommand(sm).smId := U(sm, config.dataWidth bits)
+    io.smCommand(sm).nsmId := U(config.smCount, config.dataWidth bits)
     io.smCommand(sm).gridId := currentGridId
   }
 
   private val invalidGridDimZero = io.command.gridDimX === 0 || io.command.gridDimY === 0 || io.command.gridDimZ === 0
   private val invalidBlockDimZero = io.command.blockDimX === 0 || io.command.blockDimY === 0 || io.command.blockDimZ === 0
   private val invalidBlockThreadCount =
-    blockThreadCountWide === 0 || blockThreadCountWide > U(config.maxBlockThreads, blockThreadCountWide.getWidth bits)
-  private val invalidSharedBytes = io.command.sharedBytes > U(config.sharedMemoryBytes, io.command.sharedBytes.getWidth bits)
+    blockThreadCountWide === 0 || blockThreadCountWide > U(smConfig.maxBlockThreads, blockThreadCountWide.getWidth bits)
+  private val invalidSharedBytes = io.command.sharedBytes > U(smConfig.sharedMemoryBytes, io.command.sharedBytes.getWidth bits)
 
   private val availableSmCandidates = Bits(config.smCount bits)
   for (sm <- 0 until config.smCount) {

@@ -3,33 +3,35 @@ package spinalgpu
 import spinal.core._
 import spinal.lib._
 
-class SmCtaController(config: SmConfig) extends Component {
+class SmCtaController(config: GpuConfig) extends Component {
+  private val smConfig = config.sm
+
   private object State extends SpinalEnum {
     val IDLE, CLEAR_SHARED, INIT_WARPS, RUNNING = newElement()
   }
 
   val io = new Bundle {
-    val command = in(CtaCommandDesc(config))
+    val command = in(CtaCommandDesc(smConfig))
     val start = in Bool()
     val clearDone = in Bool()
     val sharedClearBusy = in Bool()
     val sharedClearStart = out Bool()
-    val warpInitWrite = master(Flow(WarpContextWrite(config)))
+    val warpInitWrite = master(Flow(WarpContextWrite(smConfig)))
     val kernelComplete = in Bool()
-    val trapInfo = slave(Flow(TrapInfo(config)))
-    val currentCommand = out(CtaCommandDesc(config))
+    val trapInfo = slave(Flow(TrapInfo(smConfig)))
+    val currentCommand = out(CtaCommandDesc(smConfig))
     val executionStatus = out(KernelExecutionStatus(config))
   }
 
   private val state = RegInit(State.IDLE)
   private val executionStatus = Reg(KernelExecutionStatus(config))
-  private val currentCommand = Reg(CtaCommandDesc(config))
-  private val initIndex = Reg(UInt(config.warpIdWidth bits)) init (0)
+  private val currentCommand = Reg(CtaCommandDesc(smConfig))
+  private val initIndex = Reg(UInt(smConfig.warpIdWidth bits)) init (0)
   private val clearIssued = RegInit(False)
   private val trapPendingValid = RegInit(False)
-  private val trapPendingPc = Reg(UInt(config.addressWidth bits)) init (0)
+  private val trapPendingPc = Reg(UInt(smConfig.addressWidth bits)) init (0)
   private val trapPendingCode = Reg(UInt(config.faultCodeWidth bits)) init (FaultCode.None)
-  private val blockThreadCountWidth = config.threadCountWidth * 3
+  private val blockThreadCountWidth = smConfig.threadCountWidth * 3
 
   executionStatus.busy.init(False)
   executionStatus.done.init(False)
@@ -50,6 +52,7 @@ class SmCtaController(config: SmConfig) extends Component {
   currentCommand.ctaidY.init(0)
   currentCommand.ctaidZ.init(0)
   currentCommand.smId.init(0)
+  currentCommand.nsmId.init(0)
   currentCommand.gridId.init(0)
 
   io.sharedClearStart := False
@@ -71,8 +74,8 @@ class SmCtaController(config: SmConfig) extends Component {
   io.executionStatus := executionStatus
 
   private def laneMask(activeCount: UInt): Bits = {
-    val mask = Bits(config.warpSize bits)
-    for (lane <- 0 until config.warpSize) {
+    val mask = Bits(smConfig.warpSize bits)
+    for (lane <- 0 until smConfig.warpSize) {
       mask(lane) := U(lane, activeCount.getWidth bits) < activeCount
     }
     mask
@@ -82,7 +85,7 @@ class SmCtaController(config: SmConfig) extends Component {
   currentBlockThreadCountWide := (currentCommand.blockDimX.resize(blockThreadCountWidth bits) *
     currentCommand.blockDimY.resize(blockThreadCountWidth bits) *
     currentCommand.blockDimZ.resize(blockThreadCountWidth bits)).resized
-  private val currentBlockThreadCount = UInt(config.threadCountWidth bits)
+  private val currentBlockThreadCount = UInt(smConfig.threadCountWidth bits)
   currentBlockThreadCount := currentBlockThreadCountWide.resized
 
   when(io.clearDone && !executionStatus.busy) {
@@ -107,7 +110,7 @@ class SmCtaController(config: SmConfig) extends Component {
     executionStatus.faultCode := U(FaultCode.None, config.faultCodeWidth bits)
     trapPendingValid := False
     executionStatus.busy := True
-    initIndex := U(0, config.warpIdWidth bits)
+    initIndex := U(0, smConfig.warpIdWidth bits)
     clearIssued := False
     state := State.CLEAR_SHARED
   }
@@ -119,27 +122,27 @@ class SmCtaController(config: SmConfig) extends Component {
         clearIssued := True
       }
       when(clearIssued && !io.sharedClearBusy) {
-        initIndex := U(0, config.warpIdWidth bits)
+        initIndex := U(0, smConfig.warpIdWidth bits)
         state := State.INIT_WARPS
       }
     }
 
     is(State.INIT_WARPS) {
-      val baseThread = UInt(config.threadCountWidth bits)
-      baseThread := (initIndex.resize(config.threadCountWidth bits) * U(config.warpSize, config.threadCountWidth bits)).resized
+      val baseThread = UInt(smConfig.threadCountWidth bits)
+      baseThread := (initIndex.resize(smConfig.threadCountWidth bits) * U(smConfig.warpSize, smConfig.threadCountWidth bits)).resized
       val (baseThreadX, baseThreadY, baseThreadZ) =
-        ThreadCoordinateLogic.linearToCoords(config, baseThread, currentCommand.blockDimX, currentCommand.blockDimY, currentCommand.blockDimZ)
-      val remaining = UInt(config.threadCountWidth bits)
+        ThreadCoordinateLogic.linearToCoords(smConfig, baseThread, currentCommand.blockDimX, currentCommand.blockDimY, currentCommand.blockDimZ)
+      val remaining = UInt(smConfig.threadCountWidth bits)
       when(currentBlockThreadCount > baseThread) {
         remaining := currentBlockThreadCount - baseThread
       } otherwise {
-        remaining := U(0, config.threadCountWidth bits)
+        remaining := U(0, smConfig.threadCountWidth bits)
       }
 
-      val laneCount = UInt(config.threadCountWidth bits)
+      val laneCount = UInt(smConfig.threadCountWidth bits)
       laneCount := remaining
-      when(remaining > config.warpSize) {
-        laneCount := config.warpSize
+      when(remaining > smConfig.warpSize) {
+        laneCount := smConfig.warpSize
       }
 
       io.warpInitWrite.valid := True
@@ -157,7 +160,7 @@ class SmCtaController(config: SmConfig) extends Component {
       io.warpInitWrite.payload.context.exited := False
       io.warpInitWrite.payload.context.faulted := False
 
-      when(initIndex === config.residentWarpCount - 1) {
+      when(initIndex === smConfig.residentWarpCount - 1) {
         state := State.RUNNING
       } otherwise {
         initIndex := initIndex + 1

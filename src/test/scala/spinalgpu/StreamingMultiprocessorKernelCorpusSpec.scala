@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 import spinalgpu.toolchain.KernelCorpus
 
 abstract class StreamingMultiprocessorKernelCaseSpec(kernel: KernelCorpus.KernelCase) extends AnyFunSuite with Matchers {
-  private val config = SmConfig.default
+  private val config = GpuConfig.default
 
   test(s"kernel corpus case '${kernel.name}' executes from ${kernel.relativeSourcePath}") {
     KernelCorpusTestUtils.runStreamingMultiprocessorKernelCase(kernel, config)

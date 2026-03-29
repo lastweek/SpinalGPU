@@ -12,7 +12,8 @@ This repository is an architecture-first educational GPU project in SpinalHDL. F
 
 ## SpinalHDL Design Rules
 
-- Treat `SmConfig` as the single source of truth for compile-time architectural parameters.
+- Treat `GpuConfig` as the top-level source of truth for chip-level architectural parameters.
+- Treat `SmConfig` as the source of truth for SM-local architectural parameters.
 - Define typed protocol bundles and enums before implementing module logic.
 - Keep modules small and single-purpose. Split routing, arbitration, and state management into dedicated blocks instead of growing wiring-dense top modules.
 - Centralize architectural state such as warp state tables instead of smearing state across execution units.
@@ -68,4 +69,4 @@ This repository is an architecture-first educational GPU project in SpinalHDL. F
 - Do not push AXI4 deep into internal module boundaries.
 - Do not let `StreamingMultiprocessor` become a permanent god module.
 - Do not add deep behavior to a block before its interface and tests are stable.
-- Do not hide architectural decisions in ad hoc constants or anonymous bundles when they belong in `SmConfig` or typed protocol definitions.
+- Do not hide architectural decisions in ad hoc constants or anonymous bundles when they belong in `GpuConfig`, `SmConfig`, or typed protocol definitions.

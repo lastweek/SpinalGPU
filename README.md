@@ -58,6 +58,12 @@ Use the small wrappers in `scripts/` for the common inner loop:
 - [Launch and frontend execution diagram](docs/diagrams/frontend-execution.mmd)
 - [Repo agent guidelines](AGENTS.md)
 
+## Config Hierarchy
+
+- `GpuConfig` is the chip-level configuration used by `GpuTop`, `GpuCluster`, host control, and the single-SM compatibility wrapper.
+- `SmConfig` is the SM-local configuration used by execution-core modules such as sub-SMs, caches, shared memory, LSU, and CUDA cores.
+- `GpuConfig.default` preserves the default single-SM repo contract by setting `cluster.smCount = 1` and `sm = SmConfig.default`.
+
 ## Kernel Corpus
 
 - Canonical PTX subset kernel source files live under `kernels/`.

@@ -3,7 +3,9 @@ package spinalgpu
 import spinal.core._
 import spinal.lib._
 
-class SmAdmissionController(config: SmConfig) extends Component {
+class SmAdmissionController(config: GpuConfig) extends Component {
+  private val smConfig = config.sm
+
   private object State extends SpinalEnum {
     val IDLE, CLEAR_SHARED, INIT_WARPS, RUNNING = newElement()
   }
@@ -14,10 +16,10 @@ class SmAdmissionController(config: SmConfig) extends Component {
     val clearDone = in Bool()
     val sharedClearBusy = in Bool()
     val sharedClearStart = out Bool()
-    val warpInitWrite = master(Flow(WarpContextWrite(config)))
-    val registerFileClear = master(Flow(UInt(config.warpIdWidth bits)))
+    val warpInitWrite = master(Flow(WarpContextWrite(smConfig)))
+    val registerFileClear = master(Flow(UInt(smConfig.warpIdWidth bits)))
     val kernelComplete = in Bool()
-    val trapInfo = slave(Flow(TrapInfo(config)))
+    val trapInfo = slave(Flow(TrapInfo(smConfig)))
     val currentCommand = out(KernelCommandDesc(config))
     val currentGridId = out(UInt(64 bits))
     val invalidGridDim = out Bool()
@@ -31,7 +33,7 @@ class SmAdmissionController(config: SmConfig) extends Component {
   private val state = RegInit(State.IDLE)
   private val executionStatus = Reg(KernelExecutionStatus(config))
   private val currentCommand = Reg(KernelCommandDesc(config))
-  private val initIndex = Reg(UInt(config.warpIdWidth bits)) init (0)
+  private val initIndex = Reg(UInt(smConfig.warpIdWidth bits)) init (0)
   private val clearIssued = RegInit(False)
   private val trapPendingValid = RegInit(False)
   private val trapPendingPc = Reg(UInt(config.addressWidth bits)) init (0)
@@ -78,8 +80,8 @@ class SmAdmissionController(config: SmConfig) extends Component {
   io.executionStatus := executionStatus
 
   private def laneMask(activeCount: UInt): Bits = {
-    val mask = Bits(config.warpSize bits)
-    for (lane <- 0 until config.warpSize) {
+    val mask = Bits(smConfig.warpSize bits)
+    for (lane <- 0 until smConfig.warpSize) {
       mask(lane) := U(lane, activeCount.getWidth bits) < activeCount
     }
     mask
@@ -92,8 +94,8 @@ class SmAdmissionController(config: SmConfig) extends Component {
   private val invalidGridDim = io.command.gridDimX =/= 1 || io.command.gridDimY =/= 1 || io.command.gridDimZ =/= 1
   private val invalidBlockDimZero = io.command.blockDimX === 0 || io.command.blockDimY === 0 || io.command.blockDimZ === 0
   private val invalidBlockThreadCount =
-    requestedBlockThreadCountWide === 0 || requestedBlockThreadCountWide > U(config.maxBlockThreads, requestedBlockThreadCountWide.getWidth bits)
-  private val invalidSharedBytes = io.command.sharedBytes > U(config.sharedMemoryBytes, io.command.sharedBytes.getWidth bits)
+    requestedBlockThreadCountWide === 0 || requestedBlockThreadCountWide > U(smConfig.maxBlockThreads, requestedBlockThreadCountWide.getWidth bits)
+  private val invalidSharedBytes = io.command.sharedBytes > U(smConfig.sharedMemoryBytes, io.command.sharedBytes.getWidth bits)
   io.invalidGridDim := invalidGridDim
   io.invalidBlockDimZero := invalidBlockDimZero
   io.invalidBlockThreadCount := invalidBlockThreadCount
@@ -104,7 +106,7 @@ class SmAdmissionController(config: SmConfig) extends Component {
   currentBlockThreadCountWide := (currentCommand.blockDimX.resize(blockThreadCountWidth bits) *
     currentCommand.blockDimY.resize(blockThreadCountWidth bits) *
     currentCommand.blockDimZ.resize(blockThreadCountWidth bits)).resized
-  private val currentBlockThreadCount = UInt(config.threadCountWidth bits)
+  private val currentBlockThreadCount = UInt(smConfig.threadCountWidth bits)
   currentBlockThreadCount := currentBlockThreadCountWide.resized
 
   when(io.clearDone && !executionStatus.busy) {
@@ -138,7 +140,7 @@ class SmAdmissionController(config: SmConfig) extends Component {
       currentGridId := nextGridId
       nextGridId := nextGridId + 1
       executionStatus.busy := True
-      initIndex := U(0, config.warpIdWidth bits)
+      initIndex := U(0, smConfig.warpIdWidth bits)
       clearIssued := False
       state := State.CLEAR_SHARED
     }
@@ -151,27 +153,27 @@ class SmAdmissionController(config: SmConfig) extends Component {
         clearIssued := True
       }
       when(clearIssued && !io.sharedClearBusy) {
-        initIndex := U(0, config.warpIdWidth bits)
+        initIndex := U(0, smConfig.warpIdWidth bits)
         state := State.INIT_WARPS
       }
     }
 
     is(State.INIT_WARPS) {
-      val baseThread = UInt(config.threadCountWidth bits)
-      baseThread := (initIndex.resize(config.threadCountWidth bits) * U(config.warpSize, config.threadCountWidth bits)).resized
+      val baseThread = UInt(smConfig.threadCountWidth bits)
+      baseThread := (initIndex.resize(smConfig.threadCountWidth bits) * U(smConfig.warpSize, smConfig.threadCountWidth bits)).resized
       val (baseThreadX, baseThreadY, baseThreadZ) =
-        ThreadCoordinateLogic.linearToCoords(config, baseThread, currentCommand.blockDimX, currentCommand.blockDimY, currentCommand.blockDimZ)
-      val remaining = UInt(config.threadCountWidth bits)
+        ThreadCoordinateLogic.linearToCoords(smConfig, baseThread, currentCommand.blockDimX, currentCommand.blockDimY, currentCommand.blockDimZ)
+      val remaining = UInt(smConfig.threadCountWidth bits)
       when(currentBlockThreadCount > baseThread) {
         remaining := currentBlockThreadCount - baseThread
       } otherwise {
-        remaining := U(0, config.threadCountWidth bits)
+        remaining := U(0, smConfig.threadCountWidth bits)
       }
 
-      val laneCount = UInt(config.threadCountWidth bits)
+      val laneCount = UInt(smConfig.threadCountWidth bits)
       laneCount := remaining
-      when(remaining > config.warpSize) {
-        laneCount := config.warpSize
+      when(remaining > smConfig.warpSize) {
+        laneCount := smConfig.warpSize
       }
 
       io.warpInitWrite.valid := True
@@ -192,7 +194,7 @@ class SmAdmissionController(config: SmConfig) extends Component {
       io.registerFileClear.valid := True
       io.registerFileClear.payload := initIndex
 
-      when(initIndex === config.residentWarpCount - 1) {
+      when(initIndex === smConfig.residentWarpCount - 1) {
         state := State.RUNNING
       } otherwise {
         initIndex := initIndex + 1

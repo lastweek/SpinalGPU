@@ -4,7 +4,7 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axilite._
 
-class HostControlBlock(config: SmConfig) extends Component {
+class HostControlBlock(config: GpuConfig) extends Component {
   val io = new Bundle {
     val axi = slave(AxiLite4(config.axiLiteConfig))
     val command = out(KernelCommandDesc(config))

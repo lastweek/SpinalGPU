@@ -18,15 +18,15 @@ object KernelCorpusTestUtils {
   private final case class FaultObservation(fault: Boolean, code: BigInt, faultPc: BigInt)
   private object CompiledHarnessCache {
     private val streamingMultiprocessorByConfig =
-      scala.collection.mutable.HashMap.empty[SmConfig, SimCompiled[StreamingMultiprocessor]]
+      scala.collection.mutable.HashMap.empty[GpuConfig, SimCompiled[StreamingMultiprocessor]]
     private val gpuTopByConfig =
-      scala.collection.mutable.HashMap.empty[SmConfig, SimCompiled[GpuTop]]
+      scala.collection.mutable.HashMap.empty[GpuConfig, SimCompiled[GpuTop]]
 
-    def streamingMultiprocessor(config: SmConfig): SimCompiled[StreamingMultiprocessor] = synchronized {
+    def streamingMultiprocessor(config: GpuConfig): SimCompiled[StreamingMultiprocessor] = synchronized {
       streamingMultiprocessorByConfig.getOrElseUpdate(
         config, {
           val label =
-            if (config == SmConfig.default) "default StreamingMultiprocessor once for kernel-corpus execution tests"
+            if (config == GpuConfig.default) "default StreamingMultiprocessor once for kernel-corpus execution tests"
             else "StreamingMultiprocessor for non-default config"
           println(s"[progress][compile][sm] compiling $label")
           SimConfig.withVerilator.compile(new StreamingMultiprocessor(config))
@@ -34,11 +34,11 @@ object KernelCorpusTestUtils {
       )
     }
 
-    def gpuTop(config: SmConfig): SimCompiled[GpuTop] = synchronized {
+    def gpuTop(config: GpuConfig): SimCompiled[GpuTop] = synchronized {
       gpuTopByConfig.getOrElseUpdate(
         config, {
           val label =
-            if (config == SmConfig.default) "default GpuTop once for top-level corpus execution tests"
+            if (config == GpuConfig.default) "default GpuTop once for top-level corpus execution tests"
             else "GpuTop for non-default config"
           println(s"[progress][compile][gputop] compiling $label")
           SimConfig.withVerilator.compile(new GpuTop(config))
@@ -47,10 +47,10 @@ object KernelCorpusTestUtils {
     }
   }
 
-  def compiledStreamingMultiprocessor(config: SmConfig = SmConfig.default): SimCompiled[StreamingMultiprocessor] =
+  def compiledStreamingMultiprocessor(config: GpuConfig = GpuConfig.default): SimCompiled[StreamingMultiprocessor] =
     CompiledHarnessCache.streamingMultiprocessor(config)
 
-  def compiledGpuTop(config: SmConfig = SmConfig.default): SimCompiled[GpuTop] =
+  def compiledGpuTop(config: GpuConfig = GpuConfig.default): SimCompiled[GpuTop] =
     CompiledHarnessCache.gpuTop(config)
 
   private def progressLabel(harness: String, cases: Seq[KernelCase], kernel: KernelCase): String = {
@@ -172,7 +172,7 @@ object KernelCorpusTestUtils {
     }
 
   /** Runs one corpus case against the SM harness. */
-  def runStreamingMultiprocessorKernelCase(kernel: KernelCase, config: SmConfig = SmConfig.default): Unit = {
+  def runStreamingMultiprocessorKernelCase(kernel: KernelCase, config: GpuConfig = GpuConfig.default): Unit = {
     assert(
       kernel.harnessTargets.contains(HarnessTarget.StreamingMultiprocessor),
       s"${kernel.name} does not target the StreamingMultiprocessor harness"
@@ -238,7 +238,7 @@ object KernelCorpusTestUtils {
   }
 
   /** Runs one corpus case against the top-level GpuTop harness. */
-  def runGpuTopKernelCase(kernel: KernelCase, config: SmConfig = SmConfig.default): Unit = {
+  def runGpuTopKernelCase(kernel: KernelCase, config: GpuConfig = GpuConfig.default): Unit = {
     assert(kernel.harnessTargets.contains(HarnessTarget.GpuTop), s"${kernel.name} does not target the GpuTop harness")
 
     val label = progressLabel("gputop", gpuTopCaseListFor(kernel), kernel)

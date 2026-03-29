@@ -1,12 +1,9 @@
 package spinalgpu
 
 import spinal.core._
-import spinal.lib.bus.amba4.axi.Axi4Config
-import spinal.lib.bus.amba4.axilite.AxiLite4Config
 
 case class SmConfig(
     warpSize: Int = 32,
-    smCount: Int = 1,
     subSmCount: Int = 4,
     residentWarpsPerSubSm: Int = 2,
     subSmIssueWidth: Int = 32,
@@ -25,11 +22,9 @@ case class SmConfig(
     addressWidth: Int = 32,
     dataWidth: Int = 32,
     axiIdWidth: Int = 1,
-    registerCount: Int = 32,
-    controlAddressWidth: Int = 8
+    registerCount: Int = 32
 ) {
   require(warpSize > 0 && warpSize % 8 == 0, "warpSize must be a positive multiple of 8")
-  require(smCount > 0, "smCount must be positive")
   require(subSmCount > 0, "subSmCount must be positive")
   require(residentWarpsPerSubSm > 0, "residentWarpsPerSubSm must be positive")
   require(subSmIssueWidth > 0, "subSmIssueWidth must be positive")
@@ -51,7 +46,6 @@ case class SmConfig(
 
   val schedulerCount: Int = subSmCount
   val cudaLaneCount: Int = subSmIssueWidth
-  val smIdWidth: Int = log2Up(smCount max 2)
   val residentWarpCount: Int = subSmCount * residentWarpsPerSubSm
   val instructionWidth: Int = 32
   val pcWidth: Int = addressWidth
@@ -70,32 +64,6 @@ case class SmConfig(
   val specialRegisterWidth: Int = 5
   val faultCodeWidth: Int = 8
   val globalBurstBeatCountWidth: Int = log2Up(cudaLaneCount + 1)
-
-  def axiConfig: Axi4Config =
-    Axi4Config(
-      addressWidth = addressWidth,
-      dataWidth = dataWidth,
-      idWidth = axiIdWidth,
-      useId = false,
-      withAxi3 = false,
-      useRegion = false,
-      useBurst = true,
-      useLock = false,
-      useCache = false,
-      useSize = true,
-      useQos = false,
-      useLen = true,
-      useLast = true,
-      useResp = true,
-      useProt = false,
-      useStrb = true
-    )
-
-  def axiLiteConfig: AxiLite4Config =
-    AxiLite4Config(
-      addressWidth = controlAddressWidth,
-      dataWidth = dataWidth
-    )
 }
 
 object SmConfig {

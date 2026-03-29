@@ -5,13 +5,13 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 import spinal.lib.bus.amba4.axilite._
 
-case class GpuTopIo(config: SmConfig) extends Bundle {
+case class GpuTopIo(config: GpuConfig) extends Bundle {
   val memory = master(Axi4(config.axiConfig))
   val hostControl = slave(AxiLite4(config.axiLiteConfig))
   val debugExecutionStatus = out(KernelExecutionStatus(config))
 }
 
-class GpuTop(val config: SmConfig = SmConfig.default) extends Component {
+class GpuTop(val config: GpuConfig = GpuConfig.default) extends Component {
   val io = GpuTopIo(config)
 
   val coreClock = in Bool()

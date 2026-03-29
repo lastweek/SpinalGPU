@@ -4,21 +4,21 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 
-case class StreamingMultiprocessorCommandIo(config: SmConfig) extends Bundle {
+case class StreamingMultiprocessorCommandIo(config: GpuConfig) extends Bundle {
   val command = in(KernelCommandDesc(config))
   val start = in Bool()
   val clearDone = in Bool()
   val executionStatus = out(KernelExecutionStatus(config))
 }
 
-case class StreamingMultiprocessorDebugIo(config: SmConfig) extends Bundle {
-  val scheduledWarp = master(Flow(WarpScheduleReq(config)))
-  val fetchResponse = master(Flow(FetchRsp(config)))
-  val decodedInstruction = master(Flow(DecodedInstruction(config)))
-  val writeback = master(Flow(WritebackPacket(config)))
-  val trap = master(Flow(TrapInfo(config)))
+case class StreamingMultiprocessorDebugIo(config: GpuConfig) extends Bundle {
+  val scheduledWarp = master(Flow(WarpScheduleReq(config.sm)))
+  val fetchResponse = master(Flow(FetchRsp(config.sm)))
+  val decodedInstruction = master(Flow(DecodedInstruction(config.sm)))
+  val writeback = master(Flow(WritebackPacket(config.sm)))
+  val trap = master(Flow(TrapInfo(config.sm)))
   val engineState = out(UInt(3 bits))
-  val selectedWarpId = out(UInt(config.warpIdWidth bits))
+  val selectedWarpId = out(UInt(config.sm.warpIdWidth bits))
   val selectedPc = out(UInt(config.addressWidth bits))
   val fetchMemoryReqValid = out(Bool())
   val fetchMemoryReqReady = out(Bool())
@@ -35,24 +35,26 @@ case class StreamingMultiprocessorDebugIo(config: SmConfig) extends Bundle {
   val launchInvalidBlockThreadCount = out(Bool())
   val launchInvalidSharedBytes = out(Bool())
   val launchRequestedBlockThreads = out(UInt((config.threadCountWidth * 3) bits))
-  val subSmEngineStates = out(Vec(UInt(3 bits), config.subSmCount))
-  val subSmSelectedWarpIds = out(Vec(UInt(config.warpIdWidth bits), config.subSmCount))
-  val subSmSelectedPcs = out(Vec(UInt(config.addressWidth bits), config.subSmCount))
-  val subSmSlotOccupied = out(Vec(Bits(config.residentWarpsPerSubSm bits), config.subSmCount))
-  val subSmBoundWarpIds = out(Vec(Vec(UInt(config.warpIdWidth bits), config.residentWarpsPerSubSm), config.subSmCount))
+  val subSmEngineStates = out(Vec(UInt(3 bits), config.sm.subSmCount))
+  val subSmSelectedWarpIds = out(Vec(UInt(config.sm.warpIdWidth bits), config.sm.subSmCount))
+  val subSmSelectedPcs = out(Vec(UInt(config.addressWidth bits), config.sm.subSmCount))
+  val subSmSlotOccupied = out(Vec(Bits(config.sm.residentWarpsPerSubSm bits), config.sm.subSmCount))
+  val subSmBoundWarpIds =
+    out(Vec(Vec(UInt(config.sm.warpIdWidth bits), config.sm.residentWarpsPerSubSm), config.sm.subSmCount))
 }
 
-case class StreamingMultiprocessorIo(config: SmConfig) extends Bundle {
+case class StreamingMultiprocessorIo(config: GpuConfig) extends Bundle {
   val memory = master(Axi4(config.axiConfig))
   val command = StreamingMultiprocessorCommandIo(config)
   val debug = StreamingMultiprocessorDebugIo(config)
 }
 
-class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends Component {
+class StreamingMultiprocessor(val config: GpuConfig = GpuConfig.default) extends Component {
+  require(config.smCount == 1, "StreamingMultiprocessor is the single-SM compatibility wrapper; use GpuCluster for multi-SM configs")
   val io = StreamingMultiprocessorIo(config)
 
   private val smAdmissionController = new SmAdmissionController(config)
-  private val executionCore = new SmExecutionCore(config)
+  private val executionCore = new SmExecutionCore(config.sm)
   private val externalMemoryAdapter = new ExternalMemoryAxiAdapter(config)
 
   smAdmissionController.io.command := io.command.command
@@ -78,6 +80,7 @@ class StreamingMultiprocessor(val config: SmConfig = SmConfig.default) extends C
   executionCore.io.ctaCommand.ctaidY := 0
   executionCore.io.ctaCommand.ctaidZ := 0
   executionCore.io.ctaCommand.smId := 0
+  executionCore.io.ctaCommand.nsmId := 1
   executionCore.io.ctaCommand.gridId := smAdmissionController.io.currentGridId
   smAdmissionController.io.kernelComplete := executionCore.io.kernelComplete
   smAdmissionController.io.trapInfo <> executionCore.io.trapInfo

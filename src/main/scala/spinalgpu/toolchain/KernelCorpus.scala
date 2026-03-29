@@ -2,8 +2,9 @@ package spinalgpu.toolchain
 
 import java.nio.file.Path
 import spinalgpu.FaultCode
+import spinalgpu.GpuClusterConfig
+import spinalgpu.GpuConfig
 import spinalgpu.LowPrecisionCodec
-import spinalgpu.SmConfig
 
 /** Single source of truth for the PTX teaching corpus.
   *
@@ -125,7 +126,7 @@ object KernelCorpus {
 
   val sourceRoot: Path = Path.of("kernels")
   val outputRoot: Path = Path.of("generated", "kernels")
-  val multiSmRegressionConfig: SmConfig = SmConfig.default.copy(smCount = 2)
+  val multiSmRegressionConfig: GpuConfig = GpuConfig.default.copy(cluster = GpuClusterConfig(smCount = 2))
 
   final case class KernelCase(
       name: String,

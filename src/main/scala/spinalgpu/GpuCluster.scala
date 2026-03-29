@@ -4,17 +4,17 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 
-case class GpuClusterIo(config: SmConfig) extends Bundle {
+case class GpuClusterIo(config: GpuConfig) extends Bundle {
   val memory = master(Axi4(config.axiConfig))
   val command = StreamingMultiprocessorCommandIo(config)
 }
 
-class GpuCluster(val config: SmConfig = SmConfig.default) extends Component {
+class GpuCluster(val config: GpuConfig = GpuConfig.default) extends Component {
   val io = GpuClusterIo(config)
 
   private val gridDispatchController = new GridDispatchController(config)
   private val smControllers = Array.fill(config.smCount)(new SmCtaController(config))
-  private val smCores = Array.fill(config.smCount)(new SmExecutionCore(config))
+  private val smCores = Array.fill(config.smCount)(new SmExecutionCore(config.sm))
   private val clusterMemoryArbiter = new ClusterExternalMemoryArbiter(config)
   private val externalMemoryAdapter = new ExternalMemoryAxiAdapter(config)
 

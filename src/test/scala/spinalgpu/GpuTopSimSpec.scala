@@ -8,7 +8,7 @@ import spinal.lib.bus.amba4.axi.sim._
 class GpuTopSimSpec extends AnyFunSuite with Matchers {
   test("GpuTop exposes idle AXI memory and AXI-Lite control boundaries") {
     println("[progress][gputop-integration] idle-boundary-smoke start")
-    KernelCorpusTestUtils.compiledGpuTop(SmConfig.default).doSim { dut =>
+    KernelCorpusTestUtils.compiledGpuTop(GpuConfig.default).doSim { dut =>
       dut.coreClockDomain.forkStimulus(period = 10)
       ExecutionTestUtils.idleAxiLite(dut.io.hostControl)
       dut.coreClockDomain.assertReset()

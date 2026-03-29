@@ -6,7 +6,7 @@ import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
 
 abstract class StreamingMultiprocessorSingleSimSpec extends AnyFunSuite with Matchers {
-  protected val config: SmConfig = SmConfig.default
+  protected val config: GpuConfig = GpuConfig.default
 
   protected def withStreamingMultiprocessorSimulation(label: String)(body: StreamingMultiprocessor => Unit): Unit = {
     println(s"[progress][sm-integration] $label start")

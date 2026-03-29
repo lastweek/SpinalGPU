@@ -7,13 +7,14 @@ import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
 
 class ExternalMemoryAxiAdapterSpec extends AnyFunSuite with Matchers {
-  private val config = SmConfig(
+  private val smConfig = SmConfig(
     warpSize = 8,
     subSmCount = 1,
     residentWarpsPerSubSm = 1,
     subSmIssueWidth = 4,
     sharedMemoryBytes = 256
   )
+  private val config = GpuConfig(sm = smConfig)
 
   private def initDefaults(dut: ExternalMemoryAxiAdapter): Unit = {
     dut.io.request.valid #= false
@@ -24,7 +25,7 @@ class ExternalMemoryAxiAdapterSpec extends AnyFunSuite with Matchers {
     dut.io.request.payload.address #= 0
     dut.io.request.payload.beatCount #= 0
     dut.io.request.payload.byteMask #= 0xF
-    for (beat <- 0 until config.cudaLaneCount) {
+    for (beat <- 0 until smConfig.cudaLaneCount) {
       dut.io.request.payload.writeData(beat) #= 0
     }
   }

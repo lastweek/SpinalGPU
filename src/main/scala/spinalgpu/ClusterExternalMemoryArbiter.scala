@@ -3,12 +3,14 @@ package spinalgpu
 import spinal.core._
 import spinal.lib._
 
-class ClusterExternalMemoryArbiter(config: SmConfig) extends Component {
+class ClusterExternalMemoryArbiter(config: GpuConfig) extends Component {
+  private val smConfig = config.sm
+
   val io = new Bundle {
-    val smReq = Vec(slave(Stream(ExternalMemBurstReq(config))), config.smCount)
-    val smRsp = Vec(master(Stream(ExternalMemBurstRsp(config))), config.smCount)
-    val memoryReq = master(Stream(ExternalMemBurstReq(config)))
-    val memoryRsp = slave(Stream(ExternalMemBurstRsp(config)))
+    val smReq = Vec(slave(Stream(ExternalMemBurstReq(smConfig))), config.smCount)
+    val smRsp = Vec(master(Stream(ExternalMemBurstRsp(smConfig))), config.smCount)
+    val memoryReq = master(Stream(ExternalMemBurstReq(smConfig)))
+    val memoryRsp = slave(Stream(ExternalMemBurstRsp(smConfig)))
     val idle = out Bool()
   }
 
@@ -34,13 +36,13 @@ class ClusterExternalMemoryArbiter(config: SmConfig) extends Component {
     io.memoryRsp.ready := io.smRsp(0).ready
   } else {
     io.memoryReq.valid := selectedSmValid
-    io.memoryReq.payload.warpId := U(0, config.warpIdWidth bits)
+    io.memoryReq.payload.warpId := U(0, smConfig.warpIdWidth bits)
     io.memoryReq.payload.write := False
     io.memoryReq.payload.address := U(0, config.addressWidth bits)
     io.memoryReq.payload.accessWidth := MemoryAccessWidthKind.WORD
-    io.memoryReq.payload.beatCount := U(0, config.globalBurstBeatCountWidth bits)
+    io.memoryReq.payload.beatCount := U(0, smConfig.globalBurstBeatCountWidth bits)
     io.memoryReq.payload.byteMask := B(0, config.byteMaskWidth bits)
-    for (beat <- 0 until config.cudaLaneCount) {
+    for (beat <- 0 until smConfig.cudaLaneCount) {
       io.memoryReq.payload.writeData(beat) := B(0, config.dataWidth bits)
     }
 
@@ -52,7 +54,7 @@ class ClusterExternalMemoryArbiter(config: SmConfig) extends Component {
         io.memoryReq.payload.accessWidth := io.smReq(sm).payload.accessWidth
         io.memoryReq.payload.beatCount := io.smReq(sm).payload.beatCount
         io.memoryReq.payload.byteMask := io.smReq(sm).payload.byteMask
-        for (beat <- 0 until config.cudaLaneCount) {
+        for (beat <- 0 until smConfig.cudaLaneCount) {
           io.memoryReq.payload.writeData(beat) := io.smReq(sm).payload.writeData(beat)
         }
       }

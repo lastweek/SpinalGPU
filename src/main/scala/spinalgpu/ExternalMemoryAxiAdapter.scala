@@ -4,10 +4,12 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axi._
 
-class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
+class ExternalMemoryAxiAdapter(config: GpuConfig) extends Component {
+  private val smConfig = config.sm
+
   val io = new Bundle {
-    val request = slave(Stream(ExternalMemBurstReq(config)))
-    val response = master(Stream(ExternalMemBurstRsp(config)))
+    val request = slave(Stream(ExternalMemBurstReq(smConfig)))
+    val response = master(Stream(ExternalMemBurstRsp(smConfig)))
     val axi = master(Axi4(config.axiConfig))
     val idle = out Bool()
   }
@@ -17,13 +19,13 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   }
 
   private val state = RegInit(AdapterState.IDLE)
-  private val pending = Reg(ExternalMemBurstReq(config))
+  private val pending = Reg(ExternalMemBurstReq(smConfig))
   private val rspValid = RegInit(False)
-  private val rspPayload = Reg(ExternalMemBurstRsp(config))
+  private val rspPayload = Reg(ExternalMemBurstRsp(smConfig))
   private val writeAddressSent = RegInit(False)
-  private val beatIndexWidth = log2Up(config.cudaLaneCount)
-  private val writeBeatIndex = Reg(UInt(config.globalBurstBeatCountWidth bits)) init (0)
-  private val readBeatIndex = Reg(UInt(config.globalBurstBeatCountWidth bits)) init (0)
+  private val beatIndexWidth = log2Up(smConfig.cudaLaneCount)
+  private val writeBeatIndex = Reg(UInt(smConfig.globalBurstBeatCountWidth bits)) init (0)
+  private val readBeatIndex = Reg(UInt(smConfig.globalBurstBeatCountWidth bits)) init (0)
   private val readError = RegInit(False)
 
   pending.warpId.init(0)
@@ -32,7 +34,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   pending.accessWidth.init(MemoryAccessWidthKind.WORD)
   pending.beatCount.init(0)
   pending.byteMask.init(0)
-  for (beat <- 0 until config.cudaLaneCount) {
+  for (beat <- 0 until smConfig.cudaLaneCount) {
     pending.writeData(beat).init(0)
   }
 
@@ -40,7 +42,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
   rspPayload.completed.init(False)
   rspPayload.error.init(False)
   rspPayload.beatCount.init(0)
-  for (beat <- 0 until config.cudaLaneCount) {
+  for (beat <- 0 until smConfig.cudaLaneCount) {
     rspPayload.readData(beat).init(0)
   }
 
@@ -50,7 +52,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
     accessByteCount := U(2, config.addressWidth bits)
   }
 
-  private val beatCountMinusOne = UInt(config.globalBurstBeatCountWidth bits)
+  private val beatCountMinusOne = UInt(smConfig.globalBurstBeatCountWidth bits)
   beatCountMinusOne := pending.beatCount - U(1, pending.beatCount.getWidth bits)
 
   private val writeBeatAddress = UInt(config.addressWidth bits)
@@ -106,7 +108,7 @@ class ExternalMemoryAxiAdapter(config: SmConfig) extends Component {
     rspPayload.completed := True
     rspPayload.error := False
     rspPayload.beatCount := io.request.payload.beatCount
-    for (beat <- 0 until config.cudaLaneCount) {
+    for (beat <- 0 until smConfig.cudaLaneCount) {
       rspPayload.readData(beat) := B(0, config.dataWidth bits)
     }
     when(io.request.payload.write) {

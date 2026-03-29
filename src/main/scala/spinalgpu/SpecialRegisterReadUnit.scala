@@ -96,7 +96,7 @@ class SpecialRegisterReadUnit(config: SmConfig) extends Component {
         io.values(lane) := io.currentCommand.smId.resize(config.dataWidth)
       }
       is(U(SpecialRegisterKind.NsmId, config.specialRegisterWidth bits)) {
-        io.values(lane) := U(config.smCount, config.dataWidth bits)
+        io.values(lane) := io.currentCommand.nsmId.resize(config.dataWidth)
       }
       is(U(SpecialRegisterKind.GridIdLo, config.specialRegisterWidth bits)) {
         io.values(lane) := gridIdLow

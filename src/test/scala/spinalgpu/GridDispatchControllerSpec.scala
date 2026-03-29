@@ -6,13 +6,13 @@ import org.scalatest.matchers.should.Matchers
 import spinal.core.sim._
 
 class GridDispatchControllerSpec extends AnyFunSuite with Matchers {
-  private val singleSmConfig = SmConfig.default.copy(smCount = 1)
-  private val dualSmConfig = SmConfig.default.copy(smCount = 2)
+  private val singleSmConfig = GpuConfig.default.copy(cluster = GpuClusterConfig(smCount = 1))
+  private val dualSmConfig = GpuConfig.default.copy(cluster = GpuClusterConfig(smCount = 2))
 
   private def smStartBit(dut: GridDispatchController, index: Int): Boolean =
     ((dut.io.smStart.toBigInt >> index) & 1) == 1
 
-  private def initDefaults(dut: GridDispatchController, config: SmConfig): Unit = {
+  private def initDefaults(dut: GridDispatchController, config: GpuConfig): Unit = {
     dut.io.start #= false
     dut.io.clearDone #= false
     dut.io.command.entryPc #= 0x100

@@ -6,6 +6,9 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 
 - `GpuTop` still exposes one top-level AXI4 memory boundary and one AXI-Lite control boundary.
 - `GpuTop` now instantiates a `GpuCluster`, not a bare SM.
+- Compile-time config is now split by scope:
+  - `GpuConfig` owns chip-level config such as cluster sizing and host-control boundary widths.
+  - `SmConfig` owns SM-local execution, cache, register-file, and shared-memory parameters.
 - `GpuCluster` owns chip-level orchestration:
   - one `GridDispatchController`
   - one `SmCtaController` per physical SM
@@ -96,6 +99,10 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 
 ## Config Defaults
 
+- `GpuConfig.default` is the top-level chip contract.
+- `GpuConfig.cluster.smCount = 1` by default.
+- `GpuConfig.host.controlAddressWidth = 8` by default.
+- `GpuConfig.sm = SmConfig.default` by default.
 - Physical SM count: `1`
 - Warp size: `32`
 - Sub-SM count: `4`
