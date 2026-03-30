@@ -82,6 +82,7 @@ Use the small wrappers in `scripts/` for the common inner loop:
   - `kernels/control/`
   - `kernels/global_memory/`
   - `kernels/shared_memory/`
+  - `kernels/sfu/`
   - `kernels/special_registers/`
 - [`src/main/scala/spinalgpu/toolchain/KernelCorpus.scala`](src/main/scala/spinalgpu/toolchain/KernelCorpus.scala) is the single source of truth for PTX source paths, generated binary paths, launch config, preload image, expected outcome, and harness coverage.
 - [`src/test/scala/spinalgpu/KernelCorpusTestUtils.scala`](src/test/scala/spinalgpu/KernelCorpusTestUtils.scala) is the shared runner used by the corpus-backed simulation specs.

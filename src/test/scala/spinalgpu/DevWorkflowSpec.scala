@@ -10,6 +10,8 @@ class DevRegressionSpec
       new IsaSpec,
       new PtxAssemblerSpec,
       new CudaCoreArraySpec,
+      new SfuArchitectureSpec,
+      new SpecialFunctionUnitSpec,
       new Fp16MathSpec,
       new Fp8FormatSpec,
       new WarpRegisterFileSpec,

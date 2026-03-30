@@ -1,0 +1,86 @@
+// Purpose: Apply one FP32 SFU unary op family per thread and write each result stream to global memory.
+// Primary feature: special_function
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread owns one scalar FP32 input element.
+// - The kernel loads that element once, applies six unary SFU-style approximations,
+// - and stores each result into its own output stream.
+// Where this fits:
+// - This is the scalar FP32 teaching kernel for the new SFU datapath.
+// - It covers reciprocal, square-root, reciprocal-square-root, log2, exp2, and tanh in one pass.
+// Key model details:
+// - `%tid.x` selects one scalar element and `shl.b32` converts that index into a 4-byte FP32 offset.
+// - The same input value fans out to six independent unary SFU instructions.
+// - The corpus uses one CTA with exactly 8 live threads, so no bounds guard is needed.
+// CUDA-equivalent sketch (.cu):
+// __global__ void scalar_special_f32(const float* in, float* out_rcp, float* out_sqrt,
+//                                    float* out_rsqrt, float* out_lg2, float* out_ex2, float* out_tanh) {
+//   unsigned i = threadIdx.x;
+//   float x = in[i];
+//   out_rcp[i] = __frcp_rn(x);
+//   out_sqrt[i] = sqrtf(x);
+//   out_rsqrt[i] = rsqrtf(x);
+//   out_lg2[i] = __log2f(x);
+//   out_ex2[i] = __exp2f(x);
+//   out_tanh[i] = tanhf(x);
+// }
+// SpinalGPU note:
+// - The math behavior follows the repo's approximate unary SFU model rather than bit-exact NVIDIA MUFU output.
+// - The kernel is intentionally output-heavy so one compact corpus case can prove several SFU opcodes at once.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry scalar_special_f32(
+    .param .u32 in_ptr,
+    .param .u32 out_rcp_ptr,
+    .param .u32 out_sqrt_ptr,
+    .param .u32 out_rsqrt_ptr,
+    .param .u32 out_lg2_ptr,
+    .param .u32 out_ex2_ptr,
+    .param .u32 out_tanh_ptr
+)
+{
+    .reg .u32 %r<10>;
+    .reg .f32 %f<7>;
+
+    // Setup
+    // Load the input and output base pointers, then form the byte offset for this thread's FP32 scalar.
+    ld.param.u32 %r0, [in_ptr];
+    ld.param.u32 %r1, [out_rcp_ptr];
+    ld.param.u32 %r2, [out_sqrt_ptr];
+    ld.param.u32 %r3, [out_rsqrt_ptr];
+    ld.param.u32 %r4, [out_lg2_ptr];
+    ld.param.u32 %r5, [out_ex2_ptr];
+    ld.param.u32 %r6, [out_tanh_ptr];
+    mov.u32 %r7, %tid.x;
+    shl.b32 %r8, %r7, 2;
+    add.u32 %r9, %r0, %r8;
+    ld.global.f32 %f0, [%r9];
+
+    // Core
+    // Apply the unary SFU family to the same input scalar.
+    rcp.approx.f32 %f1, %f0;
+    sqrt.approx.f32 %f2, %f0;
+    rsqrt.approx.f32 %f3, %f0;
+    lg2.approx.f32 %f4, %f0;
+    ex2.approx.f32 %f5, %f0;
+    tanh.approx.f32 %f6, %f0;
+
+    // Store each SFU result stream back to global memory.
+    add.u32 %r9, %r1, %r8;
+    st.global.f32 [%r9], %f1;
+    add.u32 %r9, %r2, %r8;
+    st.global.f32 [%r9], %f2;
+    add.u32 %r9, %r3, %r8;
+    st.global.f32 [%r9], %f3;
+    add.u32 %r9, %r4, %r8;
+    st.global.f32 [%r9], %f4;
+    add.u32 %r9, %r5, %r8;
+    st.global.f32 [%r9], %f5;
+    add.u32 %r9, %r6, %r8;
+    st.global.f32 [%r9], %f6;
+
+    // Exit
+    ret;
+}

@@ -175,8 +175,8 @@ class GpuTopFullSpec extends ExecutionFrontendGpuTopSpec {
 
 @DoNotDiscover
 class GpuTopSmokeSpec extends ExecutionFrontendGpuTopSpec {
-  test("matrix_add_f32 executes through GpuTop") {
-    runGpuTopKernelCase(KernelCorpus.matrixAddF32)
+  test("scalar_special_f32 executes through GpuTop") {
+    runGpuTopKernelCase(KernelCorpus.scalarSpecialF32)
   }
 
   test("vector_add_f32x4 executes through GpuTop") {

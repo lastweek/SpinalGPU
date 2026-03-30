@@ -5,6 +5,8 @@ import spinalgpu.FaultCode
 import spinalgpu.GpuClusterConfig
 import spinalgpu.GpuConfig
 import spinalgpu.LowPrecisionCodec
+import spinalgpu.Opcode
+import spinalgpu.SfuApproxModel
 import spinalgpu.Tcgen05Layouts
 import spinalgpu.TensorCoreLayouts
 
@@ -42,6 +44,10 @@ object KernelCorpus {
 
     case object SpecialRegisters extends KernelFeature {
       override val id: String = "special_registers"
+    }
+
+    case object SpecialFunction extends KernelFeature {
+      override val id: String = "special_function"
     }
 
     case object TensorCore extends KernelFeature {
@@ -227,6 +233,31 @@ object KernelCorpus {
   private val reluClampLimit: Seq[Float] = Seq.fill(8)(3.5f)
   private val reluClampExpected: Seq[Float] =
     reluClampInput.zip(reluClampLimit).map { case (value, limit) => value.min(limit).max(0.0f) }
+
+  private val scalarSpecialF32Input: Seq[Float] = Seq(-3.5f, -1.5f, -0.75f, 0.25f, 0.75f, 1.5f, 2.5f, 5.0f)
+  private val trigPairF32Input: Seq[Float] = Seq(-3.0f, -1.25f, -0.5f, 0.125f, 0.75f, 1.25f, 2.0f, 3.25f)
+  private val scalarSpecialF16InputBits: Seq[Int] = Seq(-2.0f, -1.0f, -0.5f, 0.0f, 0.25f, 0.5f, 1.0f, 2.0f).map(LowPrecisionCodec.floatToHalfBits)
+  private val vectorSpecialF16x2InputBits: Seq[Int] = Seq(
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(-1.0f), LowPrecisionCodec.floatToHalfBits(0.25f)),
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(-0.5f), LowPrecisionCodec.floatToHalfBits(0.5f)),
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(0.0f), LowPrecisionCodec.floatToHalfBits(1.0f)),
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(0.25f), LowPrecisionCodec.floatToHalfBits(2.0f)),
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(0.5f), LowPrecisionCodec.floatToHalfBits(-0.75f)),
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(1.0f), LowPrecisionCodec.floatToHalfBits(0.125f)),
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(2.0f), LowPrecisionCodec.floatToHalfBits(0.75f)),
+    LowPrecisionCodec.packHalf2(LowPrecisionCodec.floatToHalfBits(3.0f), LowPrecisionCodec.floatToHalfBits(-0.25f))
+  )
+
+  private def unarySfuExpectedF32(opcode: Int, input: Seq[Float]): Seq[Float] =
+    input.map { value =>
+      SfuApproxModel.fp32FromBits(SfuApproxModel.applyFp32Opcode(opcode, SfuApproxModel.fp32Bits(value)))
+    }
+
+  private def unarySfuExpectedF16(opcode: Int, input: Seq[Int]): Seq[Int] =
+    input.map(bits => SfuApproxModel.applyRegisterOpcode(opcode, bits) & 0xFFFF)
+
+  private def unarySfuExpectedPacked16(opcode: Int, input: Seq[Int]): Seq[Int] =
+    input.map(bits => SfuApproxModel.applyRegisterOpcode(opcode, bits))
 
   private def linearBiasReluInput(featureCount: Int): Seq[Float] =
     (0 until featureCount).map(index => (index.toFloat * 0.5f) - 1.0f)
@@ -921,6 +952,98 @@ object KernelCorpus {
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
+  val scalarSpecialF32: KernelCase = KernelCase(
+    name = "scalar_special_f32",
+    relativeSourcePath = "sfu/scalar_special_f32.ptx",
+    purpose = "Apply one FP32 SFU unary op family per thread and write each result stream to global memory.",
+    primaryFeature = SpecialFunction,
+    secondaryFeatures = Seq(FloatingPoint, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x7A0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0xC000, values = scalarSpecialF32Input),
+      WriteArgBuffer(base = 0x7A0, values = Seq(0xC000L, 0xC100L, 0xC200L, 0xC300L, 0xC400L, 0xC500L, 0xC600L))
+    ),
+    expectation = Success(
+      checks = Seq(
+        ExpectF32(base = 0xC100, values = unarySfuExpectedF32(Opcode.FRCP, scalarSpecialF32Input)),
+        ExpectF32(base = 0xC200, values = unarySfuExpectedF32(Opcode.FSQRT, scalarSpecialF32Input)),
+        ExpectF32(base = 0xC300, values = unarySfuExpectedF32(Opcode.FRSQRT, scalarSpecialF32Input)),
+        ExpectF32(base = 0xC400, values = unarySfuExpectedF32(Opcode.FLG2, scalarSpecialF32Input)),
+        ExpectF32(base = 0xC500, values = unarySfuExpectedF32(Opcode.FEX2, scalarSpecialF32Input)),
+        ExpectF32(base = 0xC600, values = unarySfuExpectedF32(Opcode.FTANH, scalarSpecialF32Input))
+      )
+    ),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val trigPairF32: KernelCase = KernelCase(
+    name = "trig_pair_f32",
+    relativeSourcePath = "sfu/trig_pair_f32.ptx",
+    purpose = "Apply FP32 sin and cos SFU approximations to one scalar input per thread.",
+    primaryFeature = SpecialFunction,
+    secondaryFeatures = Seq(FloatingPoint, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x7C0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataF32(base = 0xC800, values = trigPairF32Input),
+      WriteArgBuffer(base = 0x7C0, values = Seq(0xC800L, 0xC900L, 0xCA00L))
+    ),
+    expectation = Success(
+      checks = Seq(
+        ExpectF32(base = 0xC900, values = unarySfuExpectedF32(Opcode.FSIN, trigPairF32Input)),
+        ExpectF32(base = 0xCA00, values = unarySfuExpectedF32(Opcode.FCOS, trigPairF32Input))
+      )
+    ),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val scalarSpecialF16: KernelCase = KernelCase(
+    name = "scalar_special_f16",
+    relativeSourcePath = "sfu/scalar_special_f16.ptx",
+    purpose = "Apply scalar FP16 `ex2.approx` and `tanh.approx` through the SFU path and store FP16 results.",
+    primaryFeature = SpecialFunction,
+    secondaryFeatures = Seq(FloatingPoint, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x7E0),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataF16(base = 0xD000, values = scalarSpecialF16InputBits),
+      WriteArgBuffer(base = 0x7E0, values = Seq(0xD000L, 0xD100L, 0xD200L))
+    ),
+    expectation = Success(
+      checks = Seq(
+        ExpectF16(base = 0xD100, values = unarySfuExpectedF16(Opcode.HEX2, scalarSpecialF16InputBits)),
+        ExpectF16(base = 0xD200, values = unarySfuExpectedF16(Opcode.HTANH, scalarSpecialF16InputBits))
+      )
+    ),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
+  val vectorSpecialF16x2: KernelCase = KernelCase(
+    name = "vector_special_f16x2",
+    relativeSourcePath = "sfu/vector_special_f16x2.ptx",
+    purpose = "Apply packed FP16x2 `ex2.approx` and `tanh.approx` lane-wise through the SFU path.",
+    primaryFeature = SpecialFunction,
+    secondaryFeatures = Seq(FloatingPoint, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 8, argBase = 0x800),
+    timeoutCycles = 40000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0xD400, values = vectorSpecialF16x2InputBits.map(word32)),
+      WriteArgBuffer(base = 0x800, values = Seq(0xD400L, 0xD500L, 0xD600L))
+    ),
+    expectation = Success(
+      checks = Seq(
+        ExpectWords(base = 0xD500, values = unarySfuExpectedPacked16(Opcode.HEX2X2, vectorSpecialF16x2InputBits).map(word32 _)),
+        ExpectWords(base = 0xD600, values = unarySfuExpectedPacked16(Opcode.HTANHX2, vectorSpecialF16x2InputBits).map(word32 _))
+      )
+    ),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
   val scalarAddF16: KernelCase = KernelCase(
     name = "scalar_add_f16",
     relativeSourcePath = "arithmetic/scalar_add_f16.ptx",
@@ -1439,6 +1562,10 @@ object KernelCorpus {
     matrixTransposeF32,
     matrixAddF32,
     matrixMulF32,
+    scalarSpecialF32,
+    trigPairF32,
+    scalarSpecialF16,
+    vectorSpecialF16x2,
     scalarAddF16,
     vectorAddF16x2,
     matrixAddF16,
@@ -1473,6 +1600,7 @@ object KernelCorpus {
   val gpuTopCases: Seq[KernelCase] = Seq(
     addStoreExit,
     gridIdStore,
+    scalarSpecialF32,
     vectorAddF32x4,
     matrixCopyF32,
     matrixAddF32,

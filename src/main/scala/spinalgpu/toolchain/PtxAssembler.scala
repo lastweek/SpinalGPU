@@ -1261,6 +1261,42 @@ object PtxAssembler {
               case "abs.f32" =>
                 val Seq(destination, source) = parseOperands(rest, 2)
                 FloatUnaryInstruction(Opcode.FABS, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "rcp.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FRCP, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "sqrt.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FSQRT, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "rsqrt.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FRSQRT, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "sin.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FSIN, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "cos.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FCOS, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "lg2.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FLG2, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "ex2.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FEX2, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "tanh.approx.f32" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                FloatUnaryInstruction(Opcode.FTANH, parseFloatRegisterName(destination), parseFloatRegisterName(source))
+              case "ex2.approx.f16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.HEX2, parseHalfRegisterName(destination), parseHalfRegisterName(source))
+              case "tanh.approx.f16" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.HTANH, parseHalfRegisterName(destination), parseHalfRegisterName(source))
+              case "ex2.approx.f16x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.HEX2X2, parseHalf2RegisterName(destination), parseHalf2RegisterName(source))
+              case "tanh.approx.f16x2" =>
+                val Seq(destination, source) = parseOperands(rest, 2)
+                RegisterUnaryInstruction(Opcode.HTANHX2, parseHalf2RegisterName(destination), parseHalf2RegisterName(source))
               case "fma.rn.f32" =>
                 val Seq(destination, lhs, rhs, accumulate) = parseOperands(rest, 4)
                 FmaInstruction(

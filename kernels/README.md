@@ -12,6 +12,8 @@ Each `.ptx` file is a small, intentionally scoped kernel used to prove one part 
   address formation and global-memory fault behavior
 - `shared_memory/`
   shared-memory round-trip behavior
+- `sfu/`
+  unary special-function teaching kernels
 - `special_registers/`
   PTX builtin register coverage
 

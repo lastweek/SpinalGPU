@@ -91,7 +91,7 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 | `L1InstructionCache` | Shared instruction-side arbitration point | One outstanding fetch at a time |
 | `CudaCoreArray` | Local CUDA arithmetic path inside each partition | Scalar FP32, scalar/packed FP16, packed FP8 conversion, integer ALU, and compare/select issue path |
 | `LoadStoreUnit` | Local LSU inside each partition | Shared-memory routing plus 16-bit and 32-bit global-memory traffic |
-| `SpecialFunctionUnit` | Local SFU inside each partition | Placeholder vector unary transform |
+| `SpecialFunctionUnit` | Local SFU inside each partition | Unary approximate FP32 / FP16 / packed-FP16x2 special math with active-mask-aware subwarp slicing |
 | `TensorCoreBlock` | Local legacy tensor path inside each partition | Warp-synchronous `ldmatrix` / `mma.sync` / `stmatrix` v1 with serialized RF/shared-memory sequencing |
 | `Tcgen05Block` | Local async tcgen05 tensor path inside each partition | Narrow descriptor-plus-TMEM tcgen05 slice with fixed per-warp TMEM windows, per-warp pending-class completion, and dense FP16 `cta_group::1` MMA |
 | `L1DataSharedMemory` | Shared data/shared-memory fabric across sub-SMs | Arbitrates local LSU traffic |
@@ -120,8 +120,24 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 - Tensor block count per sub-SM: `1`
 - Shared memory banks: `32`
 - Shared memory size: `4 KiB`
+- SFU latency: `4` cycles per subwarp slice
 - External memory boundary: `AXI4`
 - Host control boundary: `AXI-Lite`
+
+## SFU Datapath Sketch
+
+The unary SFU path inside one `SubSmPartition` is intentionally simple and explicit:
+
+```text
+warp issue
+  -> latch pending warp + active mask + opcode
+  -> process lanes in groups of cudaLaneCount
+  -> classify input / handle special cases
+  -> table-based unary approximation
+  -> optional FP16 widen-narrow wrapper
+  -> write result buffer
+  -> emit one warp response after sfuLatency * sliceCount cycles
+```
 
 ## Sub-SM Partition FP16 Throughput
 
@@ -174,6 +190,7 @@ The plotted H100 NVL markers use the official NVIDIA H100 NVL product brief, whi
   - fixed 32-bit machine instruction words
   - PTX-visible special registers such as `%tid.x`, `%ctaid.x`, and `%smid`
   - integer, FP32, FP16, packed FP16x2, and packed FP8 conversion CUDA-core ops
+  - unary approximate SFU ops for FP32 plus `ex2/tanh` on FP16 and FP16x2
   - 16-bit and 32-bit global load/store plus `.param` lowering
   - 32-bit shared-memory load/store
   - legacy warp-synchronous tensor v1 plus the narrow tcgen05 FP16 teaching slice
@@ -186,6 +203,7 @@ The plotted H100 NVL markers use the official NVIDIA H100 NVL product brief, whi
   - `kernels/control/`
   - `kernels/global_memory/`
   - `kernels/shared_memory/`
+  - `kernels/sfu/`
   - `kernels/special_registers/`
 - Success and fault expectations live in typed kernel metadata plus test expectations, not in directory names.
 

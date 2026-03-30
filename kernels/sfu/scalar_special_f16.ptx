@@ -1,0 +1,59 @@
+// Purpose: Apply scalar FP16 `ex2.approx` and `tanh.approx` through the SFU path and store FP16 results.
+// Primary feature: special_function
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread owns one scalar FP16 input element.
+// - The kernel loads that half value once, applies `ex2.approx.f16` and `tanh.approx.f16`,
+// - and stores both FP16 outputs to global memory.
+// Where this fits:
+// - This is the scalar low-precision SFU teaching kernel.
+// - It proves the widen-to-FP32 / compute / narrow-back path without packing two lanes together.
+// Key model details:
+// - Global memory carries scalar halves at 2-byte spacing, so `tid.x` is scaled by `<< 1`.
+// - `%h` values still live in the low 16 bits of the physical 32-bit register slot.
+// CUDA-equivalent sketch (.cu):
+// __global__ void scalar_special_f16(const half* in, half* out_ex2, half* out_tanh) {
+//   unsigned i = threadIdx.x;
+//   half x = in[i];
+//   out_ex2[i] = hexp2(x);
+//   out_tanh[i] = htanh(x);
+// }
+// SpinalGPU note:
+// - The repo models these as the half-precision SFU opcodes only; broader half special math is still out of scope.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry scalar_special_f16(
+    .param .u32 in_ptr,
+    .param .u32 out_ex2_ptr,
+    .param .u32 out_tanh_ptr
+)
+{
+    .reg .u32 %r<6>;
+    .reg .f16 %h<3>;
+
+    // Setup
+    // Load the three base pointers and build the 2-byte scalar-half offset for this thread.
+    ld.param.u32 %r0, [in_ptr];
+    ld.param.u32 %r1, [out_ex2_ptr];
+    ld.param.u32 %r2, [out_tanh_ptr];
+    mov.u32 %r3, %tid.x;
+    shl.b32 %r4, %r3, 1;
+    add.u32 %r5, %r0, %r4;
+    ld.global.f16 %h0, [%r5];
+
+    // Core
+    // Apply the scalar half-precision SFU pair.
+    ex2.approx.f16 %h1, %h0;
+    tanh.approx.f16 %h2, %h0;
+
+    // Store the two scalar half results.
+    add.u32 %r5, %r1, %r4;
+    st.global.f16 [%r5], %h1;
+    add.u32 %r5, %r2, %r4;
+    st.global.f16 [%r5], %h2;
+
+    // Exit
+    ret;
+}
