@@ -12,6 +12,7 @@ val spinalIdslPlugin =
 val scalaTest = "org.scalatest" %% "scalatest" % scalaTestVersion % Test
 val buildKernelCorpus = taskKey[Unit]("Compile the PTX kernel corpus into generated/kernels")
 val buildTensorKernelCorpus = taskKey[Unit]("Compile only the tensor PTX kernel subset into generated/kernels")
+val buildTcgen05KernelCorpus = taskKey[Unit]("Compile only the tcgen05 PTX kernel subset into generated/kernels")
 
 lazy val root = (project in file("."))
   .settings(
@@ -38,6 +39,9 @@ lazy val root = (project in file("."))
     buildTensorKernelCorpus := Def.taskDyn {
       (Compile / runMain).toTask(" spinalgpu.toolchain.BuildTensorKernelCorpus")
     }.value,
+    buildTcgen05KernelCorpus := Def.taskDyn {
+      (Compile / runMain).toTask(" spinalgpu.toolchain.BuildTcgen05KernelCorpus")
+    }.value,
     Test / test := ((Test / test) dependsOn buildKernelCorpus).value
   )
 
@@ -45,11 +49,16 @@ fork := true
 
 addCommandAlias("refreshKernels", "runMain spinalgpu.toolchain.BuildKernelCorpus")
 addCommandAlias("refreshTensorKernels", "runMain spinalgpu.toolchain.BuildTensorKernelCorpus")
+addCommandAlias("refreshTcgen05Kernels", "runMain spinalgpu.toolchain.BuildTcgen05KernelCorpus")
 addCommandAlias("devTest", "Test / runMain org.scalatest.tools.Runner -o -s spinalgpu.DevRegressionSpec")
 addCommandAlias("smokeTest", "Test / runMain org.scalatest.tools.Runner -o -s spinalgpu.ExecutionSmokeSpec")
 addCommandAlias("multiSmSmoke", "testOnly spinalgpu.MultiSmGpuTopSpec")
 addCommandAlias(
   "tensorMmaTest",
   ";runMain spinalgpu.toolchain.BuildTensorKernelCorpus;testOnly spinalgpu.TensorCoreBlockSpec spinalgpu.StreamingMultiprocessorTensorSpec spinalgpu.GpuTopTensorSpec"
+)
+addCommandAlias(
+  "tcgen05Test",
+  ";runMain spinalgpu.toolchain.BuildTcgen05KernelCorpus;testOnly spinalgpu.Tcgen05ArchitectureSpec spinalgpu.Tcgen05FrontendSpec spinalgpu.Tcgen05BlockSpec spinalgpu.StreamingMultiprocessorTcgen05Spec spinalgpu.GpuTopTcgen05Spec spinalgpu.Tcgen05OverlapProgressSpec"
 )
 addCommandAlias("fullTest", "test")

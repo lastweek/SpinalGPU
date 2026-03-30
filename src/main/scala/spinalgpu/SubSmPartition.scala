@@ -21,6 +21,10 @@ class SubSmPartition(config: SmConfig) extends Component {
     val IDLE, WAIT_FETCH, ISSUE, WAIT_CUDA, WAIT_LSU, WAIT_SFU, WAIT_TENSOR = newElement()
   }
 
+  private object Tcgen05WaitKind extends SpinalEnum {
+    val NONE, WAIT_LD, WAIT_ST, COMMIT = newElement()
+  }
+
   val io = new Bundle {
     val kernelBusy = in Bool()
     val clearBindings = in Bool()
@@ -35,6 +39,8 @@ class SubSmPartition(config: SmConfig) extends Component {
     val fetchMemRsp = slave(Stream(FetchMemRsp(config)))
     val sharedMemReq = master(Stream(SharedMemReq(config)))
     val sharedMemRsp = slave(Stream(SharedMemRsp(config)))
+    val tensorMemReq = master(Stream(TensorMemReq(config)))
+    val tensorMemRsp = slave(Stream(TensorMemRsp(config)))
     val externalMemReq = master(Stream(GlobalMemBurstReq(config)))
     val externalMemRsp = slave(Stream(GlobalMemBurstRsp(config)))
     val debug = SubSmPartitionDebugIo(config)
@@ -50,6 +56,7 @@ class SubSmPartition(config: SmConfig) extends Component {
   private val loadStoreUnit = new LoadStoreUnit(config)
   private val specialFunctionUnit = new SpecialFunctionUnit(config)
   private val tensorCoreBlock = new TensorCoreBlock(config)
+  private val tcgen05Block = new Tcgen05Block(config)
 
   private val engineState = RegInit(EngineState.IDLE)
   private val selectedLocalSlotReg = Reg(UInt(config.localSlotIdWidth bits)) init (0)
@@ -103,6 +110,14 @@ class SubSmPartition(config: SmConfig) extends Component {
   pendingOp.decoded.isExit.init(False)
   pendingOp.decoded.isTrap.init(False)
   pendingOp.decoded.isS2r.init(False)
+
+  private val tcgen05LdPending = Vec.fill(config.residentWarpsPerSubSm)(RegInit(False))
+  private val tcgen05StPending = Vec.fill(config.residentWarpsPerSubSm)(RegInit(False))
+  private val tcgen05MmaPending = Vec.fill(config.residentWarpsPerSubSm)(RegInit(False))
+  private val tcgen05WaitKind = Vec.fill(config.residentWarpsPerSubSm)(Reg(Tcgen05WaitKind()) init (Tcgen05WaitKind.NONE))
+  private val tcgen05WaitPc = Vec.fill(config.residentWarpsPerSubSm)(Reg(UInt(config.addressWidth bits)) init (0))
+  private val tcgen05WaitNextPc = Vec.fill(config.residentWarpsPerSubSm)(Reg(UInt(config.addressWidth bits)) init (0))
+  private val tcgen05LdRdBase = Vec.fill(config.residentWarpsPerSubSm)(Reg(UInt(config.registerAddressWidth bits)) init (0))
 
   private def clearSelectedContext(): Unit = {
     selectedContextReg.valid := False
@@ -283,6 +298,15 @@ class SubSmPartition(config: SmConfig) extends Component {
     instructionReg := B(0, config.instructionWidth bits)
     clearSelectedContext()
     clearPendingOp()
+    for (slot <- 0 until config.residentWarpsPerSubSm) {
+      tcgen05LdPending(slot) := False
+      tcgen05StPending(slot) := False
+      tcgen05MmaPending(slot) := False
+      tcgen05WaitKind(slot) := Tcgen05WaitKind.NONE
+      tcgen05WaitPc(slot) := U(0, config.addressWidth bits)
+      tcgen05WaitNextPc(slot) := U(0, config.addressWidth bits)
+      tcgen05LdRdBase(slot) := U(0, config.registerAddressWidth bits)
+    }
   }
 
   private val slotReady = Bits(config.residentWarpsPerSubSm bits)
@@ -309,13 +333,14 @@ class SubSmPartition(config: SmConfig) extends Component {
   private val selectedWarpId = selectedSlotView.warpId
 
   private val frontend = new Area {
-    fetchUnit.io.request.valid := io.kernelBusy && engineState === EngineState.IDLE && selectedLocalSlotValid
+    fetchUnit.io.request.valid :=
+      io.kernelBusy && engineState === EngineState.IDLE && selectedLocalSlotValid && !tcgen05Block.io.ownsRegisterReads && !tcgen05Block.io.event.valid
     fetchUnit.io.request.payload.warpId := selectedWarpId
     fetchUnit.io.request.payload.pc := selectedContext.pc
 
     fetchUnit.io.memoryReq <> io.fetchMemReq
     fetchUnit.io.memoryRsp <> io.fetchMemRsp
-    fetchUnit.io.response.ready := engineState === EngineState.WAIT_FETCH
+    fetchUnit.io.response.ready := engineState === EngineState.WAIT_FETCH && !tcgen05Block.io.event.valid
 
     when(fetchUnit.io.request.fire) {
       selectedLocalSlotReg := selectedLocalSlot
@@ -383,11 +408,12 @@ class SubSmPartition(config: SmConfig) extends Component {
     readAddrC := decodeUnit.io.decoded.rs2
   }
 
-  private val tensorOwnsRegisterReads = engineState === EngineState.WAIT_TENSOR
+  private val legacyTensorOwnsRegisterReads = engineState === EngineState.WAIT_TENSOR
+  private val tcgen05OwnsRegisterReads = !legacyTensorOwnsRegisterReads && tcgen05Block.io.ownsRegisterReads
   registerFile.io.readSlotId := selectedLocalSlotReg
-  registerFile.io.readAddrA := Mux(tensorOwnsRegisterReads, tensorCoreBlock.io.readAddrA, readAddrA)
-  registerFile.io.readAddrB := Mux(tensorOwnsRegisterReads, tensorCoreBlock.io.readAddrB, readAddrB)
-  registerFile.io.readAddrC := Mux(tensorOwnsRegisterReads, tensorCoreBlock.io.readAddrC, readAddrC)
+  registerFile.io.readAddrA := Mux(legacyTensorOwnsRegisterReads, tensorCoreBlock.io.readAddrA, Mux(tcgen05OwnsRegisterReads, tcgen05Block.io.readAddrA, readAddrA))
+  registerFile.io.readAddrB := Mux(legacyTensorOwnsRegisterReads, tensorCoreBlock.io.readAddrB, Mux(tcgen05OwnsRegisterReads, tcgen05Block.io.readAddrB, readAddrB))
+  registerFile.io.readAddrC := Mux(legacyTensorOwnsRegisterReads, tensorCoreBlock.io.readAddrC, Mux(tcgen05OwnsRegisterReads, tcgen05Block.io.readAddrC, readAddrC))
 
   specialRegisterUnit.io.decoded := decodeUnit.io.decoded
   specialRegisterUnit.io.selectedWarpId := selectedWarpIdReg
@@ -397,6 +423,10 @@ class SubSmPartition(config: SmConfig) extends Component {
   private val immediateUInt = decodeUnit.io.decoded.immediate.asUInt
   private val advancePc = (selectedContextReg.pc + U(4, config.addressWidth bits)).resized
   private val branchTarget = (advancePc + immediateUInt.resized).resized
+  private val selectedTcgen05LdPending = tcgen05LdPending(selectedLocalSlotReg)
+  private val selectedTcgen05StPending = tcgen05StPending(selectedLocalSlotReg)
+  private val selectedTcgen05MmaPending = tcgen05MmaPending(selectedLocalSlotReg)
+  private val fullWriteMask = B((BigInt(1) << config.warpSize) - 1, config.warpSize bits)
   private val branchTrueBits = Bits(config.warpSize bits)
   private val branchFalseBits = Bits(config.warpSize bits)
 
@@ -423,7 +453,7 @@ class SubSmPartition(config: SmConfig) extends Component {
       cudaCoreArray.io.issue.payload.operandB(lane) := immediateUInt.resized.asBits
     }
   }
-  cudaCoreArray.io.response.ready := engineState === EngineState.WAIT_CUDA
+  cudaCoreArray.io.response.ready := engineState === EngineState.WAIT_CUDA && !tcgen05Block.io.event.valid
 
   loadStoreUnit.io.issue.valid := False
   loadStoreUnit.io.issue.payload.warpId := selectedWarpIdReg
@@ -441,7 +471,7 @@ class SubSmPartition(config: SmConfig) extends Component {
   }
   loadStoreUnit.io.externalMemReq <> io.externalMemReq
   loadStoreUnit.io.externalMemRsp <> io.externalMemRsp
-  loadStoreUnit.io.response.ready := engineState === EngineState.WAIT_LSU
+  loadStoreUnit.io.response.ready := engineState === EngineState.WAIT_LSU && !tcgen05Block.io.event.valid
 
   specialFunctionUnit.io.issue.valid := False
   specialFunctionUnit.io.issue.payload.warpId := selectedWarpIdReg
@@ -450,7 +480,7 @@ class SubSmPartition(config: SmConfig) extends Component {
   for (lane <- 0 until config.warpSize) {
     specialFunctionUnit.io.issue.payload.operand(lane) := registerFile.io.readDataA(lane)
   }
-  specialFunctionUnit.io.response.ready := engineState === EngineState.WAIT_SFU
+  specialFunctionUnit.io.response.ready := engineState === EngineState.WAIT_SFU && !tcgen05Block.io.event.valid
 
   tensorCoreBlock.io.issue.valid := False
   tensorCoreBlock.io.issue.payload.warpId := selectedWarpIdReg
@@ -463,9 +493,24 @@ class SubSmPartition(config: SmConfig) extends Component {
   tensorCoreBlock.io.readDataA := registerFile.io.readDataA
   tensorCoreBlock.io.readDataB := registerFile.io.readDataB
   tensorCoreBlock.io.readDataC := registerFile.io.readDataC
-  tensorCoreBlock.io.response.ready := engineState === EngineState.WAIT_TENSOR
+  tensorCoreBlock.io.response.ready := engineState === EngineState.WAIT_TENSOR && !tcgen05Block.io.event.valid
 
-  private val tensorOwnsSharedMemory = engineState === EngineState.WAIT_TENSOR
+  tcgen05Block.io.launch.valid := False
+  tcgen05Block.io.launch.payload.warpId := selectedWarpIdReg
+  tcgen05Block.io.launch.payload.localSlotId := selectedLocalSlotReg
+  tcgen05Block.io.launch.payload.opcode := decodeUnit.io.decoded.opcode
+  tcgen05Block.io.launch.payload.activeMask := selectedContextReg.activeMask
+  tcgen05Block.io.launch.payload.rdBase := decodeUnit.io.decoded.rd
+  tcgen05Block.io.launch.payload.rs0Base := decodeUnit.io.decoded.rs0
+  tcgen05Block.io.launch.payload.rs1Base := decodeUnit.io.decoded.rs1
+  tcgen05Block.io.launch.payload.rs2Base := decodeUnit.io.decoded.rs2
+  tcgen05Block.io.readDataA := registerFile.io.readDataA
+  tcgen05Block.io.readDataB := registerFile.io.readDataB
+  tcgen05Block.io.readDataC := registerFile.io.readDataC
+  tcgen05Block.io.event.ready := engineState =/= EngineState.ISSUE
+
+  private val legacyTensorOwnsSharedMemory = engineState === EngineState.WAIT_TENSOR
+  private val tcgen05OwnsSharedMemory = !legacyTensorOwnsSharedMemory && (tcgen05Block.io.sharedMemReq.valid || tcgen05Block.io.sharedMemRsp.ready)
   io.sharedMemReq.valid := False
   io.sharedMemReq.payload.warpId := U(0, config.warpIdWidth bits)
   io.sharedMemReq.payload.write := False
@@ -481,18 +526,30 @@ class SubSmPartition(config: SmConfig) extends Component {
   tensorCoreBlock.io.sharedMemRsp.valid := False
   tensorCoreBlock.io.sharedMemRsp.payload := io.sharedMemRsp.payload
 
-  when(tensorOwnsSharedMemory) {
+  tcgen05Block.io.sharedMemReq.ready := False
+  tcgen05Block.io.sharedMemRsp.valid := False
+  tcgen05Block.io.sharedMemRsp.payload := io.sharedMemRsp.payload
+
+  when(legacyTensorOwnsSharedMemory) {
     io.sharedMemReq.valid := tensorCoreBlock.io.sharedMemReq.valid
     io.sharedMemReq.payload := tensorCoreBlock.io.sharedMemReq.payload
     tensorCoreBlock.io.sharedMemReq.ready := io.sharedMemReq.ready
     tensorCoreBlock.io.sharedMemRsp.valid := io.sharedMemRsp.valid
+  } elsewhen (tcgen05OwnsSharedMemory) {
+    io.sharedMemReq.valid := tcgen05Block.io.sharedMemReq.valid
+    io.sharedMemReq.payload := tcgen05Block.io.sharedMemReq.payload
+    tcgen05Block.io.sharedMemReq.ready := io.sharedMemReq.ready
+    tcgen05Block.io.sharedMemRsp.valid := io.sharedMemRsp.valid
   } otherwise {
     io.sharedMemReq.valid := loadStoreUnit.io.sharedMemReq.valid
     io.sharedMemReq.payload := loadStoreUnit.io.sharedMemReq.payload
     loadStoreUnit.io.sharedMemReq.ready := io.sharedMemReq.ready
     loadStoreUnit.io.sharedMemRsp.valid := io.sharedMemRsp.valid
   }
-  io.sharedMemRsp.ready := Mux(tensorOwnsSharedMemory, tensorCoreBlock.io.sharedMemRsp.ready, loadStoreUnit.io.sharedMemRsp.ready)
+  io.sharedMemRsp.ready := Mux(legacyTensorOwnsSharedMemory, tensorCoreBlock.io.sharedMemRsp.ready, Mux(tcgen05OwnsSharedMemory, tcgen05Block.io.sharedMemRsp.ready, loadStoreUnit.io.sharedMemRsp.ready))
+
+  io.tensorMemReq <> tcgen05Block.io.tensorMemReq
+  tcgen05Block.io.tensorMemRsp <> io.tensorMemRsp
 
   when(engineState === EngineState.ISSUE) {
     when(decodeUnit.io.decoded.illegal) {
@@ -622,10 +679,190 @@ class SubSmPartition(config: SmConfig) extends Component {
         engineState := EngineState.WAIT_SFU
       }
     } elsewhen (decodeUnit.io.decoded.target === ExecutionUnitKind.TENSOR) {
-      tensorCoreBlock.io.issue.valid := True
-      when(tensorCoreBlock.io.issue.ready) {
-        capturePendingOp(decodeUnit.io.decoded)
-        engineState := EngineState.WAIT_TENSOR
+      when(decodeUnit.io.decoded.opcode === B(Opcode.TCGEN05_WAIT_LD, 8 bits)) {
+        when(selectedTcgen05LdPending) {
+          tcgen05WaitKind(selectedLocalSlotReg) := Tcgen05WaitKind.WAIT_LD
+          tcgen05WaitPc(selectedLocalSlotReg) := selectedContextReg.pc
+          tcgen05WaitNextPc(selectedLocalSlotReg) := advancePc
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = selectedContextReg.pc,
+            runnable = True,
+            outstanding = True,
+            exited = selectedContextReg.exited,
+            faulted = selectedContextReg.faulted
+          )
+          engineState := EngineState.IDLE
+        } otherwise {
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = advancePc,
+            runnable = True,
+            outstanding = False,
+            exited = selectedContextReg.exited,
+            faulted = selectedContextReg.faulted
+          )
+          engineState := EngineState.IDLE
+        }
+        clearPendingOp()
+      } elsewhen (decodeUnit.io.decoded.opcode === B(Opcode.TCGEN05_WAIT_ST, 8 bits)) {
+        when(selectedTcgen05StPending) {
+          tcgen05WaitKind(selectedLocalSlotReg) := Tcgen05WaitKind.WAIT_ST
+          tcgen05WaitPc(selectedLocalSlotReg) := selectedContextReg.pc
+          tcgen05WaitNextPc(selectedLocalSlotReg) := advancePc
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = selectedContextReg.pc,
+            runnable = True,
+            outstanding = True,
+            exited = selectedContextReg.exited,
+            faulted = selectedContextReg.faulted
+          )
+          engineState := EngineState.IDLE
+        } otherwise {
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = advancePc,
+            runnable = True,
+            outstanding = False,
+            exited = selectedContextReg.exited,
+            faulted = selectedContextReg.faulted
+          )
+          engineState := EngineState.IDLE
+        }
+        clearPendingOp()
+      } elsewhen (decodeUnit.io.decoded.opcode === B(Opcode.TCGEN05_COMMIT_CTA1, 8 bits)) {
+        when(selectedTcgen05MmaPending) {
+          tcgen05WaitKind(selectedLocalSlotReg) := Tcgen05WaitKind.COMMIT
+          tcgen05WaitPc(selectedLocalSlotReg) := selectedContextReg.pc
+          tcgen05WaitNextPc(selectedLocalSlotReg) := advancePc
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = selectedContextReg.pc,
+            runnable = True,
+            outstanding = True,
+            exited = selectedContextReg.exited,
+            faulted = selectedContextReg.faulted
+          )
+          engineState := EngineState.IDLE
+        } otherwise {
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = advancePc,
+            runnable = True,
+            outstanding = False,
+            exited = selectedContextReg.exited,
+            faulted = selectedContextReg.faulted
+          )
+          engineState := EngineState.IDLE
+        }
+        clearPendingOp()
+      } elsewhen (decodeUnit.io.decoded.opcode === B(Opcode.TCGEN05_LD_32X32B_X2, 8 bits)) {
+        when(selectedTcgen05LdPending) {
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = selectedContextReg.pc,
+            runnable = False,
+            outstanding = False,
+            exited = selectedContextReg.exited,
+            faulted = True
+          )
+          emitTrap(selectedWarpIdReg, selectedContextReg.pc, FaultCode.TensorProtocol)
+          clearPendingOp()
+          engineState := EngineState.IDLE
+        } otherwise {
+          tcgen05Block.io.launch.valid := True
+          when(tcgen05Block.io.launch.ready) {
+            tcgen05LdPending(selectedLocalSlotReg) := True
+            tcgen05LdRdBase(selectedLocalSlotReg) := decodeUnit.io.decoded.rd
+            emitContextUpdate(
+              index = selectedWarpIdReg,
+              source = selectedContextReg,
+              pc = advancePc,
+              runnable = True,
+              outstanding = False,
+              exited = selectedContextReg.exited,
+              faulted = selectedContextReg.faulted
+            )
+            clearPendingOp()
+            engineState := EngineState.IDLE
+          }
+        }
+      } elsewhen (decodeUnit.io.decoded.opcode === B(Opcode.TCGEN05_ST_32X32B_X2, 8 bits)) {
+        when(selectedTcgen05StPending) {
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = selectedContextReg.pc,
+            runnable = False,
+            outstanding = False,
+            exited = selectedContextReg.exited,
+            faulted = True
+          )
+          emitTrap(selectedWarpIdReg, selectedContextReg.pc, FaultCode.TensorProtocol)
+          clearPendingOp()
+          engineState := EngineState.IDLE
+        } otherwise {
+          tcgen05Block.io.launch.valid := True
+          when(tcgen05Block.io.launch.ready) {
+            tcgen05StPending(selectedLocalSlotReg) := True
+            emitContextUpdate(
+              index = selectedWarpIdReg,
+              source = selectedContextReg,
+              pc = advancePc,
+              runnable = True,
+              outstanding = False,
+              exited = selectedContextReg.exited,
+              faulted = selectedContextReg.faulted
+            )
+            clearPendingOp()
+            engineState := EngineState.IDLE
+          }
+        }
+      } elsewhen (decodeUnit.io.decoded.opcode === B(Opcode.TCGEN05_MMA_CTA1_F16, 8 bits)) {
+        when(selectedTcgen05MmaPending) {
+          emitContextUpdate(
+            index = selectedWarpIdReg,
+            source = selectedContextReg,
+            pc = selectedContextReg.pc,
+            runnable = False,
+            outstanding = False,
+            exited = selectedContextReg.exited,
+            faulted = True
+          )
+          emitTrap(selectedWarpIdReg, selectedContextReg.pc, FaultCode.TensorProtocol)
+          clearPendingOp()
+          engineState := EngineState.IDLE
+        } otherwise {
+          tcgen05Block.io.launch.valid := True
+          when(tcgen05Block.io.launch.ready) {
+            tcgen05MmaPending(selectedLocalSlotReg) := True
+            emitContextUpdate(
+              index = selectedWarpIdReg,
+              source = selectedContextReg,
+              pc = advancePc,
+              runnable = True,
+              outstanding = False,
+              exited = selectedContextReg.exited,
+              faulted = selectedContextReg.faulted
+            )
+            clearPendingOp()
+            engineState := EngineState.IDLE
+          }
+        }
+      } otherwise {
+        tensorCoreBlock.io.issue.valid := !tcgen05Block.io.busy
+        when(tensorCoreBlock.io.issue.ready && !tcgen05Block.io.busy) {
+          capturePendingOp(decodeUnit.io.decoded)
+          engineState := EngineState.WAIT_TENSOR
+        }
       }
     } otherwise {
       emitContextUpdate(
@@ -639,6 +876,98 @@ class SubSmPartition(config: SmConfig) extends Component {
       )
       clearPendingOp()
       engineState := EngineState.IDLE
+    }
+  }
+
+  private val tcgen05EventLocalSlot =
+    if (config.residentWarpsPerSubSm == 1) U(0, config.localSlotIdWidth bits) else tcgen05Block.io.event.payload.localSlotId
+  private val tcgen05EventContext =
+    if (config.residentWarpsPerSubSm == 1) io.localContexts(0).context else io.localContexts(tcgen05EventLocalSlot).context
+  private val tcgen05EventWarpId =
+    if (config.residentWarpsPerSubSm == 1) io.localContexts(0).warpId else io.localContexts(tcgen05EventLocalSlot).warpId
+
+  when(tcgen05Block.io.event.fire) {
+    val eventWriteRd =
+      (tcgen05LdRdBase(tcgen05EventLocalSlot) + tcgen05Block.io.event.payload.writeOffset.resize(config.registerAddressWidth)).resized
+    emitWriteback(
+      slotId = tcgen05EventLocalSlot,
+      warpId = tcgen05Block.io.event.payload.warpId,
+      rd = eventWriteRd,
+      writeMask = fullWriteMask,
+      data = tcgen05Block.io.event.payload.result,
+      enable = tcgen05Block.io.event.payload.writeEnable
+    )
+
+    when(tcgen05Block.io.event.payload.error) {
+      when(tcgen05Block.io.event.payload.opClass === Tcgen05OpClass.LD) {
+        tcgen05LdPending(tcgen05EventLocalSlot) := False
+      } elsewhen (tcgen05Block.io.event.payload.opClass === Tcgen05OpClass.ST) {
+        tcgen05StPending(tcgen05EventLocalSlot) := False
+      } elsewhen (tcgen05Block.io.event.payload.opClass === Tcgen05OpClass.MMA) {
+        tcgen05MmaPending(tcgen05EventLocalSlot) := False
+      }
+
+      val faultPc = UInt(config.addressWidth bits)
+      faultPc := tcgen05EventContext.pc
+      when(tcgen05WaitKind(tcgen05EventLocalSlot) =/= Tcgen05WaitKind.NONE) {
+        faultPc := tcgen05WaitPc(tcgen05EventLocalSlot)
+      }
+
+      emitContextUpdate(
+        index = tcgen05EventWarpId,
+        source = tcgen05EventContext,
+        pc = faultPc,
+        runnable = False,
+        outstanding = False,
+        exited = tcgen05EventContext.exited,
+        faulted = True
+      )
+      emitTrap(tcgen05EventWarpId, faultPc, tcgen05Block.io.event.payload.faultCode)
+      tcgen05WaitKind(tcgen05EventLocalSlot) := Tcgen05WaitKind.NONE
+    } elsewhen (tcgen05Block.io.event.payload.completed) {
+      when(tcgen05Block.io.event.payload.opClass === Tcgen05OpClass.LD) {
+        tcgen05LdPending(tcgen05EventLocalSlot) := False
+        when(tcgen05WaitKind(tcgen05EventLocalSlot) === Tcgen05WaitKind.WAIT_LD) {
+          emitContextUpdate(
+            index = tcgen05EventWarpId,
+            source = tcgen05EventContext,
+            pc = tcgen05WaitNextPc(tcgen05EventLocalSlot),
+            runnable = True,
+            outstanding = False,
+            exited = tcgen05EventContext.exited,
+            faulted = tcgen05EventContext.faulted
+          )
+          tcgen05WaitKind(tcgen05EventLocalSlot) := Tcgen05WaitKind.NONE
+        }
+      } elsewhen (tcgen05Block.io.event.payload.opClass === Tcgen05OpClass.ST) {
+        tcgen05StPending(tcgen05EventLocalSlot) := False
+        when(tcgen05WaitKind(tcgen05EventLocalSlot) === Tcgen05WaitKind.WAIT_ST) {
+          emitContextUpdate(
+            index = tcgen05EventWarpId,
+            source = tcgen05EventContext,
+            pc = tcgen05WaitNextPc(tcgen05EventLocalSlot),
+            runnable = True,
+            outstanding = False,
+            exited = tcgen05EventContext.exited,
+            faulted = tcgen05EventContext.faulted
+          )
+          tcgen05WaitKind(tcgen05EventLocalSlot) := Tcgen05WaitKind.NONE
+        }
+      } elsewhen (tcgen05Block.io.event.payload.opClass === Tcgen05OpClass.MMA) {
+        tcgen05MmaPending(tcgen05EventLocalSlot) := False
+        when(tcgen05WaitKind(tcgen05EventLocalSlot) === Tcgen05WaitKind.COMMIT) {
+          emitContextUpdate(
+            index = tcgen05EventWarpId,
+            source = tcgen05EventContext,
+            pc = tcgen05WaitNextPc(tcgen05EventLocalSlot),
+            runnable = True,
+            outstanding = False,
+            exited = tcgen05EventContext.exited,
+            faulted = tcgen05EventContext.faulted
+          )
+          tcgen05WaitKind(tcgen05EventLocalSlot) := Tcgen05WaitKind.NONE
+        }
+      }
     }
   }
 

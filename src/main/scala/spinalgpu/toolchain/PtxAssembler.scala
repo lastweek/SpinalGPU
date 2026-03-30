@@ -326,6 +326,59 @@ object PtxAssembler {
       )
   }
 
+  private final case class Tcgen05LoadInstruction(destinationBase: String, addressRegister: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(
+        Isa.encodeRrrr(
+          Opcode.TCGEN05_LD_32X32B_X2,
+          rd = layout.requireIntegerRegister(destinationBase),
+          rs0 = layout.requireIntegerRegister(addressRegister),
+          rs1 = 0,
+          rs2 = 0
+        )
+      )
+  }
+
+  private final case class Tcgen05StoreInstruction(addressRegister: String, sourceBase: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(
+        Isa.encodeRrrr(
+          Opcode.TCGEN05_ST_32X32B_X2,
+          rd = 0,
+          rs0 = layout.requireIntegerRegister(addressRegister),
+          rs1 = layout.requireIntegerRegister(sourceBase),
+          rs2 = 0
+        )
+      )
+  }
+
+  private final case class Tcgen05WaitInstruction(opcode: Int) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(Isa.encodeRrrr(opcode, rd = 0, rs0 = 0, rs1 = 0, rs2 = 0))
+  }
+
+  private final case class Tcgen05MmaInstruction(destinationAddress: String, aDescBase: String, bDescBase: String, controlBase: String)
+      extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(
+        Isa.encodeRrrr(
+          Opcode.TCGEN05_MMA_CTA1_F16,
+          rd = layout.requireIntegerRegister(destinationAddress),
+          rs0 = layout.requireIntegerRegister(aDescBase),
+          rs1 = layout.requireIntegerRegister(bDescBase),
+          rs2 = layout.requireIntegerRegister(controlBase)
+        )
+      )
+  }
+
   private final case class SetPredicateInstruction(
       compareOpcode: Int,
       predicate: String,
@@ -1022,11 +1075,41 @@ object PtxAssembler {
       tuple
     }
 
+    def parseContiguousIntegerRegisterTuple(token: String, width: Int): Seq[String] = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("{") && trimmed.endsWith("}"), s"expected brace tuple, got: $trimmed")
+      val inner = trimmed.drop(1).dropRight(1).trim
+      require(inner.nonEmpty, s"empty tuple operand: $trimmed")
+      val items = parseTopLevelOperands(inner)
+      require(items.length == width, s"expected tuple width $width, got ${items.length}: $trimmed")
+
+      val tuple = items.map(parseIntegerRegisterName)
+      val indexPattern = """%r(\d+)""".r
+      val indices = tuple.map {
+        case indexPattern(indexText) => indexText.toInt
+        case name => throw new IllegalArgumentException(s"PTX line $lineNumber: tcgen05 tuples only support canonical %r registers, got: $name")
+      }
+
+      indices.zip(indices.tail).foreach { case (current, next) =>
+        require(next == current + 1, s"tcgen05 tuple registers must be contiguous and ascending: $trimmed")
+      }
+
+      tuple
+    }
+
     def parseTensorSharedAddress(token: String): String = {
       val operand = parseMemoryOperand(token)
       require(operand.symbol.isEmpty, s"tensor shared-memory operands only support address registers, got: $token")
       require(operand.immediateOffset == 0, s"tensor shared-memory operands do not support immediate offsets, got: $token")
       val register = operand.baseRegister.getOrElse(throw new IllegalArgumentException(s"tensor shared-memory operands require a base register, got: $token"))
+      parseIntegerRegisterName(register)
+    }
+
+    def parseTcgen05Address(token: String): String = {
+      val operand = parseMemoryOperand(token)
+      require(operand.symbol.isEmpty, s"tcgen05 operands only support address registers, got: $token")
+      require(operand.immediateOffset == 0, s"tcgen05 operands do not support immediate offsets, got: $token")
+      val register = operand.baseRegister.getOrElse(throw new IllegalArgumentException(s"tcgen05 operands require a base register, got: $token"))
       parseIntegerRegisterName(register)
     }
 
@@ -1048,6 +1131,9 @@ object PtxAssembler {
             mnemonic match {
               case "trap" => TrapInstruction
               case "ret" => RetInstruction
+              case "tcgen05.wait::ld.sync.aligned" => Tcgen05WaitInstruction(Opcode.TCGEN05_WAIT_LD)
+              case "tcgen05.wait::st.sync.aligned" => Tcgen05WaitInstruction(Opcode.TCGEN05_WAIT_ST)
+              case "tcgen05.commit.cta_group::1.sync.aligned" => Tcgen05WaitInstruction(Opcode.TCGEN05_COMMIT_CTA1)
               case _ => throw new IllegalArgumentException(s"PTX line $lineNumber: unsupported PTX instruction: $statement")
             }
           case mnemonic :: rest :: Nil =>
@@ -1107,6 +1193,20 @@ object PtxAssembler {
                 val Seq(address, sourceTuple) = parseOperands(rest, 2)
                 val sources = parseTensorHalf2RegisterTuple(sourceTuple, 2)
                 TensorStoreMatrixInstruction(parseTensorSharedAddress(address), sources.head)
+              case "tcgen05.ld.sync.aligned.32x32b.x2.b32" =>
+                val Seq(destinationTuple, address) = parseOperands(rest, 2)
+                val destinations = parseContiguousIntegerRegisterTuple(destinationTuple, 2)
+                Tcgen05LoadInstruction(destinations.head, parseTcgen05Address(address))
+              case "tcgen05.st.sync.aligned.32x32b.x2.b32" =>
+                val Seq(address, sourceTuple) = parseOperands(rest, 2)
+                val sources = parseContiguousIntegerRegisterTuple(sourceTuple, 2)
+                Tcgen05StoreInstruction(parseTcgen05Address(address), sources.head)
+              case "tcgen05.mma.cta_group::1.kind::f16" =>
+                val Seq(destinationAddress, aDescTuple, bDescTuple, controlTuple) = parseOperands(rest, 4)
+                val aDesc = parseContiguousIntegerRegisterTuple(aDescTuple, 2)
+                val bDesc = parseContiguousIntegerRegisterTuple(bDescTuple, 2)
+                val control = parseContiguousIntegerRegisterTuple(controlTuple, 2)
+                Tcgen05MmaInstruction(parseTcgen05Address(destinationAddress), aDesc.head, bDesc.head, control.head)
               case "add.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.ADD, Some(Opcode.ADDI), destination, lhs, parseScalarOperand(rhs))

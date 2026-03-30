@@ -21,7 +21,7 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
   - local warp slot scheduler
   - local register-file slice
   - local instruction fetch frontend through an `L0InstructionCache`
-  - local CUDA, LSU, SFU, and tensor blocks
+  - local CUDA, LSU, SFU, legacy tensor, and tcgen05 tensor blocks
   - local `PendingWarpOp` tracking plus typed `SubSmStatus`
 - SM-local resources are shared across the 4 partitions:
   - `WarpStateTable`
@@ -29,6 +29,8 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
   - `L1InstructionCache`
   - `L1DataSharedMemory`
   - `SharedMemory`
+  - `L1TensorMemory`
+  - `TensorMemory`
   - `ExternalMemoryArbiter`
 - Cluster-level resources are shared across all physical SMs:
   - `GridDispatchController`
@@ -80,7 +82,7 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 | `SmAdmissionController` | Validates launches and initializes architectural warp state in the compatibility wrapper | One CTA only, `gridDim=(1,1,1)` only |
 | `WarpStateTable` | Holds architectural warp context for all resident warps inside one SM | SM-local runtime state only |
 | `WarpBinder` | Binds unbound ready warps into sub-SM local slots | Round-robin across sub-SMs and warps |
-| `SubSmPartition` | Local warp scheduling, fetch, decode, issue, and writeback | One warp issue slot per partition with typed status and latched pending-op completion |
+| `SubSmPartition` | Local warp scheduling, fetch, decode, issue, and writeback | One warp issue slot per partition with typed status, legacy pending-op completion, and a per-warp tcgen05 async scoreboard |
 | `LocalWarpSlotTable` | Tracks local slot occupancy and bound warp IDs | Handles free-slot lookup and clear/rebind state |
 | `LocalWarpScheduler` | Chooses the next ready local slot | Round-robin from a rotating local base |
 | `WarpRegisterFile` | Holds per-thread registers for bound local warp slots | One local slice per sub-SM |
@@ -90,9 +92,12 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 | `CudaCoreArray` | Local CUDA arithmetic path inside each partition | Scalar FP32, scalar/packed FP16, packed FP8 conversion, integer ALU, and compare/select issue path |
 | `LoadStoreUnit` | Local LSU inside each partition | Shared-memory routing plus 16-bit and 32-bit global-memory traffic |
 | `SpecialFunctionUnit` | Local SFU inside each partition | Placeholder vector unary transform |
-| `TensorCoreBlock` | Local tensor path inside each partition | Warp-synchronous `ldmatrix` / `mma.sync` / `stmatrix` v1 with serialized RF/shared-memory sequencing |
+| `TensorCoreBlock` | Local legacy tensor path inside each partition | Warp-synchronous `ldmatrix` / `mma.sync` / `stmatrix` v1 with serialized RF/shared-memory sequencing |
+| `Tcgen05Block` | Local async tcgen05 tensor path inside each partition | Narrow descriptor-plus-TMEM tcgen05 slice with fixed per-warp TMEM windows, per-warp pending-class completion, and dense FP16 `cta_group::1` MMA |
 | `L1DataSharedMemory` | Shared data/shared-memory fabric across sub-SMs | Arbitrates local LSU traffic |
 | `SharedMemory` | SM-local shared memory backing store | Single-port word-addressed memory with clear support; the public PTX surface is still 32-bit only here |
+| `L1TensorMemory` | Shared Tensor Memory fabric across sub-SMs | Arbitrates local tcgen05 TMEM traffic |
+| `TensorMemory` | SM-local Tensor Memory backing store | Single-port word-addressed TMEM used only by the current tcgen05 teaching slice |
 | `ExternalMemoryArbiter` | Shares the external memory path between instruction and data fabrics | One fetch side plus one LSU side |
 | `ClusterExternalMemoryArbiter` | Shares the external memory path across physical SMs | One outstanding SM burst at a time in the current phase |
 | `ExternalMemoryAxiAdapter` | Bridges internal burst req/rsp to AXI4 | Single shared AXI adapter at the cluster boundary |
@@ -144,9 +149,12 @@ The plotted H100 NVL markers use the official NVIDIA H100 NVL product brief, whi
     - `SubSmPartition -> L0InstructionCache -> shared L1InstructionCache -> ExternalMemoryArbiter -> SM external burst port`
   - data path:
     - `SubSmPartition LSU -> L1DataSharedMemory -> SharedMemory or ExternalMemoryArbiter -> SM external burst port`
+  - tensor-memory path:
+    - `SubSmPartition Tcgen05Block -> L1TensorMemory -> TensorMemory`
 - At the chip boundary:
   - `SmExecutionCore burst ports -> ClusterExternalMemoryArbiter -> ExternalMemoryAxiAdapter -> AXI4`
 - Shared memory is SM-local. There is no cross-SM shared-memory fabric in this phase.
+- Tensor Memory is also SM-local in the current tcgen05 slice. It is distinct from shared memory and is statically partitioned per resident warp.
 - The L0 and L1 cache blocks are still structural placeholders. They establish the intended partitioned topology first; detailed caching behavior can come later.
 
 ## Interface Rules
@@ -168,6 +176,7 @@ The plotted H100 NVL markers use the official NVIDIA H100 NVL product brief, whi
   - integer, FP32, FP16, packed FP16x2, and packed FP8 conversion CUDA-core ops
   - 16-bit and 32-bit global load/store plus `.param` lowering
   - 32-bit shared-memory load/store
+  - legacy warp-synchronous tensor v1 plus the narrow tcgen05 FP16 teaching slice
   - uniform branch, exit, and trap
 
 ## PTX Corpus Structure

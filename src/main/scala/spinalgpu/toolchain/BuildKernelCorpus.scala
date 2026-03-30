@@ -30,3 +30,13 @@ object BuildTensorKernelCorpus {
     buildAll().foreach(path => println(s"built ${path.toString}"))
   }
 }
+
+object BuildTcgen05KernelCorpus {
+  def buildAll(outputRoot: Path = KernelCorpus.outputRoot): Seq[Path] =
+    BuildKernelCorpus.buildCases(KernelCorpus.tcgen05Cases, outputRoot)
+
+  def main(args: Array[String]): Unit = {
+    require(args.isEmpty, "usage: spinalgpu.toolchain.BuildTcgen05KernelCorpus")
+    buildAll().foreach(path => println(s"built ${path.toString}"))
+  }
+}

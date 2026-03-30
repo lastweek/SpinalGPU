@@ -171,18 +171,31 @@ class DecodeUnit(config: SmConfig) extends Component {
         io.decoded.usesRs0 := True
       } elsewhen (opcodeUInt >= Opcode.tensorBase && opcodeUInt <= Opcode.tensorLast) {
         io.decoded.target := ExecutionUnitKind.TENSOR
-        io.decoded.usesRs0 := True
         switch(opcode) {
           is(B(Opcode.LDMATRIX_X4, 8 bits), B(Opcode.LDMATRIX_X2_TRANS, 8 bits), B(Opcode.LDMATRIX_X2, 8 bits)) {
+            io.decoded.usesRs0 := True
             io.decoded.writesRd := True
           }
           is(B(Opcode.MMA_SYNC_F16_F16_F16_F16, 8 bits)) {
+            io.decoded.usesRs0 := True
             io.decoded.writesRd := True
             io.decoded.usesRs1 := True
             io.decoded.usesRs2 := True
           }
           is(B(Opcode.STMATRIX_X2, 8 bits)) {
+            io.decoded.usesRs0 := True
             io.decoded.usesRs1 := True
+          }
+          is(B(Opcode.TCGEN05_LD_32X32B_X2, 8 bits)) {
+            io.decoded.writesRd := False
+          }
+          is(B(Opcode.TCGEN05_ST_32X32B_X2, 8 bits)) {
+          }
+          is(B(Opcode.TCGEN05_WAIT_LD, 8 bits), B(Opcode.TCGEN05_WAIT_ST, 8 bits)) {
+          }
+          is(B(Opcode.TCGEN05_MMA_CTA1_F16, 8 bits)) {
+          }
+          is(B(Opcode.TCGEN05_COMMIT_CTA1, 8 bits)) {
           }
           default {
             io.decoded.illegal := True

@@ -52,7 +52,9 @@ class SmExecutionCore(val config: SmConfig = SmConfig.default) extends Component
   private val l0InstructionCaches = Array.fill(config.subSmCount)(new L0InstructionCache(config))
   private val l1InstructionCache = new L1InstructionCache(config)
   private val l1DataSharedMemory = new L1DataSharedMemory(config)
+  private val l1TensorMemory = new L1TensorMemory(config)
   private val sharedMemory = new SharedMemory(config)
+  private val tensorMemory = new TensorMemory(config)
   private val externalMemoryArbiter = new ExternalMemoryArbiter(config)
 
   private val bindingTable = Vec.fill(config.residentWarpCount)(Reg(WarpBindingInfo(config)))
@@ -88,8 +90,11 @@ class SmExecutionCore(val config: SmConfig = SmConfig.default) extends Component
 
   sharedMemory.io.request <> l1DataSharedMemory.io.sharedMemReq
   l1DataSharedMemory.io.sharedMemRsp <> sharedMemory.io.response
+  tensorMemory.io.request <> l1TensorMemory.io.tensorMemReq
+  l1TensorMemory.io.tensorMemRsp <> tensorMemory.io.response
   sharedMemory.io.clear.start := io.sharedClearStart
-  io.sharedClearBusy := sharedMemory.io.clear.busy
+  tensorMemory.io.clear.start := io.sharedClearStart
+  io.sharedClearBusy := sharedMemory.io.clear.busy || tensorMemory.io.clear.busy
 
   for (subSm <- 0 until config.subSmCount) {
     l0InstructionCaches(subSm).io.request <> subSms(subSm).io.fetchMemReq
@@ -99,6 +104,8 @@ class SmExecutionCore(val config: SmConfig = SmConfig.default) extends Component
 
     l1DataSharedMemory.io.sharedReq(subSm) <> subSms(subSm).io.sharedMemReq
     subSms(subSm).io.sharedMemRsp <> l1DataSharedMemory.io.sharedRsp(subSm)
+    l1TensorMemory.io.request(subSm) <> subSms(subSm).io.tensorMemReq
+    subSms(subSm).io.tensorMemRsp <> l1TensorMemory.io.response(subSm)
     l1DataSharedMemory.io.externalReq(subSm) <> subSms(subSm).io.externalMemReq
     subSms(subSm).io.externalMemRsp <> l1DataSharedMemory.io.externalRsp(subSm)
   }
@@ -178,8 +185,10 @@ class SmExecutionCore(val config: SmConfig = SmConfig.default) extends Component
   private val sharedFabricsIdle =
     l1InstructionCache.io.idle &&
       l1DataSharedMemory.io.idle &&
+      l1TensorMemory.io.idle &&
       externalMemoryArbiter.io.idle &&
-      !sharedMemory.io.clear.busy
+      !sharedMemory.io.clear.busy &&
+      !tensorMemory.io.clear.busy
   io.kernelComplete := io.kernelBusy && allWarpTerminal && allSubSmsIdle && sharedFabricsIdle
 
   io.trapInfo.valid := False

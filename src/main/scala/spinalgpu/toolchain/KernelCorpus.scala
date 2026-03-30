@@ -5,6 +5,7 @@ import spinalgpu.FaultCode
 import spinalgpu.GpuClusterConfig
 import spinalgpu.GpuConfig
 import spinalgpu.LowPrecisionCodec
+import spinalgpu.Tcgen05Layouts
 import spinalgpu.TensorCoreLayouts
 
 /** Single source of truth for the PTX teaching corpus.
@@ -415,6 +416,15 @@ object KernelCorpus {
       })
     }
 
+  private def tcgen05PackRowMajorMatrix(matrix: Array[Array[Int]], cols: Int): Seq[Int] = {
+    require(cols % 2 == 0, "tcgen05 packed row-major matrices require an even column count")
+    matrix.flatMap { rowValues =>
+      rowValues.grouped(2).map { pair =>
+        tensorSetHalf(tensorSetHalf(0, 0, pair.head), 1, pair(1))
+      }
+    }.toSeq
+  }
+
   private def halfFmaBits(lhs: Int, rhs: Int, acc: Int): Int =
     halfBits((halfFloat(lhs) * halfFloat(rhs)) + halfFloat(acc))
 
@@ -455,6 +465,12 @@ object KernelCorpus {
   private val tensorMmaInputBWords: Seq[Int] = tensorPackVerticalTiles(tensorMmaInputB)
   private val tensorMmaInputCWords: Seq[Int] = tensorPackVerticalTiles(tensorMmaInputC)
   private val tensorMmaExpectedDWords: Seq[Int] = tensorPackVerticalTiles(tensorMmaExpectedD)
+
+  private val tcgen05RoundtripInputWords: Seq[Int] = tensorRoundtripInputWords
+  private val tcgen05MmaInputAWords: Seq[Int] = tcgen05PackRowMajorMatrix(tensorMmaInputA, cols = Tcgen05Layouts.K)
+  private val tcgen05MmaInputBWords: Seq[Int] = tcgen05PackRowMajorMatrix(tensorMmaInputB, cols = Tcgen05Layouts.N)
+  private val tcgen05MmaInputCWords: Seq[Int] = tcgen05PackRowMajorMatrix(tensorMmaInputC, cols = Tcgen05Layouts.N)
+  private val tcgen05MmaExpectedDWords: Seq[Int] = tcgen05PackRowMajorMatrix(tensorMmaExpectedD, cols = Tcgen05Layouts.N)
 
   private val scalarAddF16InputA: Seq[Int] =
     Seq(-1.0f, 0.5f, 1.5f, -2.25f, 3.0f, 4.5f, -5.5f, 6.0f).map(halfBits)
@@ -1013,6 +1029,75 @@ object KernelCorpus {
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
+  val tcgen05LdStRoundtripF16: KernelCase = KernelCase(
+    name = "tcgen05_ld_st_roundtrip_f16",
+    relativeSourcePath = "tensor/tcgen05_ld_st_roundtrip_f16.ptx",
+    purpose = "Round-trip one packed FP16 tensor tile through tcgen05.st and tcgen05.ld.",
+    primaryFeature = TensorCore,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 32, argBase = 0x7C0),
+    timeoutCycles = 120000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0xB000, values = tcgen05RoundtripInputWords.map(word32)),
+      WriteArgBuffer(base = 0x7C0, values = Seq(0xB000L, 0xB400L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xB400, values = tcgen05RoundtripInputWords.map(word32)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val tcgen05MmaF16: KernelCase = KernelCase(
+    name = "tcgen05_mma_f16",
+    relativeSourcePath = "tensor/tcgen05_mma_f16.ptx",
+    purpose = "Execute one descriptor-driven tcgen05 FP16 MMA tile using shared-memory A/B and TMEM-backed D.",
+    primaryFeature = TensorCore,
+    secondaryFeatures = Seq(SharedMemory, GlobalMemory, SpecialRegisters, FloatingPoint),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 32, argBase = 0x7E0, sharedBytes = 768),
+    timeoutCycles = 160000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0xC000, values = tcgen05MmaInputAWords.map(word32)),
+      WriteDataWords(base = 0xC400, values = tcgen05MmaInputBWords.map(word32)),
+      WriteDataWords(base = 0xC800, values = tcgen05MmaInputCWords.map(word32)),
+      WriteArgBuffer(base = 0x7E0, values = Seq(0xC000L, 0xC400L, 0xC800L, 0xCC00L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xCC00, values = tcgen05MmaExpectedDWords.map(word32)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val tcgen05LdHazard: KernelCase = KernelCase(
+    name = "tcgen05_ld_hazard",
+    relativeSourcePath = "tensor/tcgen05_ld_hazard.ptx",
+    purpose = "Fault when a second tcgen05.ld is issued before tcgen05.wait::ld drains the pending load class.",
+    primaryFeature = TensorCore,
+    secondaryFeatures = Seq(GlobalMemory, SpecialRegisters),
+    teachingLevel = KernelLevel.Fault,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 32, argBase = 0x820),
+    timeoutCycles = 120000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0xD000, values = tcgen05RoundtripInputWords.map(word32)),
+      WriteArgBuffer(base = 0x820, values = Seq(0xD000L, 0xD400L))
+    ),
+    expectation = KernelExpectation.Fault(code = FaultCode.TensorProtocol),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val tcgen05OverlapProgress: KernelCase = KernelCase(
+    name = "tcgen05_overlap_progress",
+    relativeSourcePath = "tensor/tcgen05_overlap_progress.ptx",
+    purpose = "Prove one warp can keep making progress while another warp has a pending tcgen05 load in the same sub-SM.",
+    primaryFeature = TensorCore,
+    secondaryFeatures = Seq(SharedMemory, GlobalMemory, SpecialRegisters, Control),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 64, argBase = 0x840, sharedBytes = 128),
+    timeoutCycles = 160000,
+    preloadOps = Seq(
+      WriteArgBuffer(base = 0x840, values = Seq(0xD800L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xD800, values = ((0 until 32).map(_ => 0L) ++ (32 until 64).map(_.toLong))))),
+    harnessTargets = Seq(StreamingMultiprocessor)
+  )
+
   val scalarConvertE4m3x2F16x2: KernelCase = KernelCase(
     name = "scalar_convert_e4m3x2_f16x2",
     relativeSourcePath = "arithmetic/scalar_convert_e4m3x2_f16x2.ptx",
@@ -1360,6 +1445,10 @@ object KernelCorpus {
     matrixMulF16AccumF32,
     tensorLdmatrixStmatrixRoundtripF16,
     tensorMmaF16F16F16,
+    tcgen05LdStRoundtripF16,
+    tcgen05MmaF16,
+    tcgen05LdHazard,
+    tcgen05OverlapProgress,
     scalarConvertE4m3x2F16x2,
     scalarConvertE5m2x2F16x2,
     vectorAddE4m3x2,
@@ -1392,6 +1481,9 @@ object KernelCorpus {
     matrixMulF16AccumF32,
     tensorLdmatrixStmatrixRoundtripF16,
     tensorMmaF16F16F16,
+    tcgen05LdStRoundtripF16,
+    tcgen05MmaF16,
+    tcgen05LdHazard,
     vectorAddE4m3x2,
     matrixMulE5m2x2AccumF32
   )
@@ -1405,6 +1497,12 @@ object KernelCorpus {
   val tensorCases: Seq[KernelCase] = Seq(
     tensorLdmatrixStmatrixRoundtripF16,
     tensorMmaF16F16F16
+  )
+  val tcgen05Cases: Seq[KernelCase] = Seq(
+    tcgen05LdStRoundtripF16,
+    tcgen05MmaF16,
+    tcgen05LdHazard,
+    tcgen05OverlapProgress
   )
   val streamingMultiprocessorCases: Seq[KernelCase] =
     all.filter(_.harnessTargets.contains(HarnessTarget.StreamingMultiprocessor))

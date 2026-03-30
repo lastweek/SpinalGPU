@@ -15,6 +15,10 @@ object MemoryAccessWidthKind extends SpinalEnum {
   val HALFWORD, WORD = newElement()
 }
 
+object Tcgen05OpClass extends SpinalEnum {
+  val NONE, LD, ST, MMA = newElement()
+}
+
 case class KernelCommandDesc(config: GpuConfig) extends Bundle {
   val entryPc = UInt(config.addressWidth bits)
   val gridDimX = UInt(config.dataWidth bits)
@@ -241,6 +245,29 @@ case class TensorRsp(config: SmConfig) extends Bundle {
   val result = Vec(Bits(config.dataWidth bits), config.warpSize)
 }
 
+case class Tcgen05LaunchReq(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val localSlotId = UInt(config.localSlotIdWidth bits)
+  val opcode = Bits(8 bits)
+  val activeMask = Bits(config.warpSize bits)
+  val rdBase = UInt(config.registerAddressWidth bits)
+  val rs0Base = UInt(config.registerAddressWidth bits)
+  val rs1Base = UInt(config.registerAddressWidth bits)
+  val rs2Base = UInt(config.registerAddressWidth bits)
+}
+
+case class Tcgen05Event(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val localSlotId = UInt(config.localSlotIdWidth bits)
+  val opClass = Tcgen05OpClass()
+  val completed = Bool()
+  val writeEnable = Bool()
+  val writeOffset = UInt(2 bits)
+  val error = Bool()
+  val faultCode = UInt(config.faultCodeWidth bits)
+  val result = Vec(Bits(config.dataWidth bits), config.warpSize)
+}
+
 case class PendingWarpOp(config: SmConfig) extends Bundle {
   val valid = Bool()
   val warpId = UInt(config.warpIdWidth bits)
@@ -268,6 +295,20 @@ case class SharedMemRsp(config: SmConfig) extends Bundle {
   val error = Bool()
   val readData = Bits(config.dataWidth bits)
   val bankIndex = UInt(config.sharedBankIndexWidth bits)
+}
+
+case class TensorMemReq(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val write = Bool()
+  val address = UInt(config.tensorAddressWidth bits)
+  val writeData = Bits(config.dataWidth bits)
+}
+
+case class TensorMemRsp(config: SmConfig) extends Bundle {
+  val warpId = UInt(config.warpIdWidth bits)
+  val completed = Bool()
+  val error = Bool()
+  val readData = Bits(config.dataWidth bits)
 }
 
 case class GlobalMemBurstReq(config: SmConfig) extends Bundle {
@@ -315,6 +356,16 @@ case class KernelExecutionStatus(config: GpuConfig) extends Bundle {
 }
 
 case class SharedMemoryClearIo(config: SmConfig) extends Bundle with IMasterSlave {
+  val start = Bool()
+  val busy = Bool()
+
+  override def asMaster(): Unit = {
+    out(start)
+    in(busy)
+  }
+}
+
+case class TensorMemoryClearIo(config: SmConfig) extends Bundle with IMasterSlave {
   val start = Bool()
   val busy = Bool()
 

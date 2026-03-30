@@ -1,0 +1,78 @@
+// Purpose: Prove another warp can make forward progress while one warp has a pending tcgen05 load in the same sub-SM.
+// Primary feature: tensor_core
+// Expected outcome: success
+//
+// High-level execution flow:
+// - Warp 0 launches one tcgen05 load and then spins on shared-memory flags.
+// - Warp 1 writes those flags and stores visible progress markers to global memory.
+// - Warp 0 only exits after warp 1 has run, so the kernel deadlocks if pending tcgen05 work stalls the whole sub-SM.
+//
+// Where this fits:
+// - This is the concurrency teaching kernel for the async tcgen05 slice.
+// - It checks the architectural change from legacy `WAIT_TENSOR` to per-warp tcgen05 pending tracking.
+//
+// Key model details:
+// - The intended test config binds two warps into one sub-SM so both warps contend for the same local scheduler.
+// - Warp-uniform control flow is preserved: branching is only on `tid.x < 32`, which is uniform within each warp.
+// - Every lane owns one shared flag word, avoiding unsupported intra-warp divergence around a single lane.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void tcgen05_overlap_progress(uint32_t* out_words) {
+//   __shared__ uint32_t flags[32];
+//   unsigned tid = threadIdx.x;
+//   unsigned lane = tid & 31;
+//   if (tid < 32) {
+//     // Launch tcgen05.ld, then wait for warp 1 to raise flags[lane].
+//   } else {
+//     flags[lane] = 1;
+//     out_words[tid] = tid;
+//   }
+// }
+//
+// SpinalGPU note:
+// - This kernel is meant for a targeted one-subSM, two-warp test configuration so the overlap guarantee is exercised inside one partition.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry tcgen05_overlap_progress(
+    .param .u32 out_words_ptr
+)
+{
+    .reg .u32 %r<13>;
+    .pred %p<2>;
+    .shared .align 4 .b8 flags[128];
+
+// Setup
+    ld.param.u32 %r0, [out_words_ptr];
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %laneid;
+    shl.b32 %r3, %r2, 2;
+    setp.lt.u32 %p0, %r1, 32;
+    @%p0 bra warp0;
+
+// Core
+warp1:
+    mov.u32 %r4, 1;
+    st.shared.u32 [flags + %r3], %r4;
+    shl.b32 %r5, %r1, 2;
+    add.u32 %r6, %r0, %r5;
+    st.global.u32 [%r6], %r1;
+    ret;
+
+warp0:
+    mov.u32 %r7, 0;
+    tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r8, %r9}, [%r7];
+
+spin:
+    ld.shared.u32 %r10, [flags + %r3];
+    setp.eq.u32 %p1, %r10, 0;
+    @%p1 bra spin;
+    tcgen05.wait::ld.sync.aligned;
+    shl.b32 %r5, %r1, 2;
+    add.u32 %r6, %r0, %r5;
+    st.global.u32 [%r6], %r8;
+
+// Exit
+    ret;
+}

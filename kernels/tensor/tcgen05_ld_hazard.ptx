@@ -1,0 +1,58 @@
+// Purpose: Trigger the tcgen05 load-class hazard by issuing a second tcgen05.ld before waiting on the first.
+// Primary feature: tensor_core
+// Expected outcome: fault
+//
+// High-level execution flow:
+// - The warp first seeds Tensor Memory with one packed FP16 tile.
+// - It launches one `tcgen05.ld` and immediately launches a second `tcgen05.ld` without `tcgen05.wait::ld`.
+// - The second launch should fault with the tensor protocol hazard path.
+//
+// Where this fits:
+// - This is the negative control for the tcgen05 async scoreboard.
+// - It proves that load-class hazards fail deterministically instead of being silently serialized.
+//
+// Key model details:
+// - The current repo tracks one pending tcgen05 load class per resident warp.
+// - The second `tcgen05.ld` reuses the same TMEM address and destination tuple intentionally.
+// - The fault is raised by the sub-SM control path before the second launch is accepted.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void tcgen05_ld_hazard(const uint32_t* in_words, uint32_t* out_words) {
+//   // Stage one tile into TMEM, then intentionally issue two tcgen05 loads without waiting.
+// }
+//
+// SpinalGPU note:
+// - The repo uses an explicit `tensor_protocol` fault for this teaching hazard instead of PTX's broader undefined-behavior space.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry tcgen05_ld_hazard(
+    .param .u32 in_words_ptr,
+    .param .u32 out_words_ptr
+)
+{
+    .reg .u32 %r<10>;
+
+// Setup
+    ld.param.u32 %r0, [in_words_ptr];
+    ld.param.u32 %r1, [out_words_ptr];
+    mov.u32 %r2, %tid.x;
+    shl.b32 %r3, %r2, 2;
+    add.u32 %r4, %r3, 128;
+    mov.u32 %r5, 0;
+
+    add.u32 %r6, %r0, %r3;
+    ld.global.u32 %r8, [%r6];
+    add.u32 %r7, %r0, %r4;
+    ld.global.u32 %r9, [%r7];
+    tcgen05.st.sync.aligned.32x32b.x2.b32 [%r5], {%r8, %r9};
+    tcgen05.wait::st.sync.aligned;
+
+// Fault trigger
+    tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r8, %r9}, [%r5];
+    tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r8, %r9}, [%r5];
+
+// Exit
+    ret;
+}

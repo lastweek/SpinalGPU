@@ -19,6 +19,7 @@ case class SmConfig(
     tensorCoreCount: Int = 1,
     sharedMemoryBankCount: Int = 32,
     sharedMemoryBytes: Int = 4 * 1024,
+    tensorMemoryBytesPerWarp: Int = 512,
     addressWidth: Int = 32,
     dataWidth: Int = 32,
     axiIdWidth: Int = 1,
@@ -41,6 +42,8 @@ case class SmConfig(
   require(tensorCoreCount > 0, "tensorCoreCount must be positive")
   require(sharedMemoryBankCount > 0, "sharedMemoryBankCount must be positive")
   require(sharedMemoryBytes > 0, "sharedMemoryBytes must be positive")
+  require(tensorMemoryBytesPerWarp > 0, "tensorMemoryBytesPerWarp must be positive")
+  require(tensorMemoryBytesPerWarp % (dataWidth / 8) == 0, "tensorMemoryBytesPerWarp must be aligned to the machine word width")
   require(dataWidth % 8 == 0, "dataWidth must be a multiple of 8")
   require(registerCount == 32, "v1 frontend assumes 32 general-purpose registers")
 
@@ -61,6 +64,11 @@ case class SmConfig(
   val sharedWordCount: Int = sharedMemoryBytes / byteCount
   val sharedAddressWidth: Int = log2Up(sharedWordCount max 2)
   val sharedBankIndexWidth: Int = log2Up(sharedMemoryBankCount max 2)
+  val tensorMemoryBytes: Int = tensorMemoryBytesPerWarp * residentWarpCount
+  val tensorWordCount: Int = tensorMemoryBytes / byteCount
+  val tensorWordsPerWarp: Int = tensorMemoryBytesPerWarp / byteCount
+  val tensorAddressWidth: Int = log2Up(tensorWordCount max 2)
+  val tensorLocalAddressWidth: Int = log2Up(tensorWordsPerWarp max 2)
   val specialRegisterWidth: Int = 5
   val faultCodeWidth: Int = 8
   val globalBurstBeatCountWidth: Int = log2Up(cudaLaneCount + 1)

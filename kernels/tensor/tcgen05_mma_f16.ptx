@@ -1,0 +1,104 @@
+// Purpose: Execute one descriptor-driven tcgen05 FP16 MMA tile and store the packed FP16 result words.
+// Primary feature: tensor_core
+// Expected outcome: success
+//
+// High-level execution flow:
+// - The warp stages a row-major A matrix and a row-major B matrix into shared memory.
+// - It seeds Tensor Memory with the row-major FP16 accumulator tile using `tcgen05.st`.
+// - The warp issues one `tcgen05.mma`, commits it, reloads the resulting D tile from Tensor Memory, and drains it to global memory.
+//
+// Where this fits:
+// - This is the minimal Blackwell-style descriptor-plus-TMEM teaching kernel in the repo.
+// - It proves the async tcgen05 control flow without adding allocators, sparse metadata, or wider tensor families.
+//
+// Key model details:
+// - A and B descriptors are carried in contiguous `%r` tuples; only the low descriptor word is used in this narrow slice.
+// - The control tuple uses `0x11`: FP16 dense MMA plus "load D from TMEM first" in the repo's teaching contract.
+// - C and D live in TMEM, not in `%x` fragment registers like the legacy `mma.sync` path.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void tcgen05_mma_f16(const uint32_t* a_words, const uint32_t* b_words,
+//                                 const uint32_t* c_words, uint32_t* d_words) {
+//   __shared__ uint32_t a_tile[128];
+//   __shared__ uint32_t b_tile[64];
+//   unsigned lane = threadIdx.x;
+//   // Stage A/B, seed TMEM with C, launch tcgen05.mma, commit, reload D from TMEM, then store D.
+// }
+//
+// SpinalGPU note:
+// - This repo slice models a narrow tcgen05 form with fixed per-warp TMEM windows and tuple-based `%r` descriptors instead of full PTX operand richness.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry tcgen05_mma_f16(
+    .param .u32 a_words_ptr,
+    .param .u32 b_words_ptr,
+    .param .u32 c_words_ptr,
+    .param .u32 d_words_ptr
+)
+{
+    .reg .u32 %r<22>;
+    .shared .align 16 .b8 a_tile[512];
+    .shared .align 16 .b8 b_tile[256];
+
+// Setup
+    ld.param.u32 %r0, [a_words_ptr];
+    ld.param.u32 %r1, [b_words_ptr];
+    ld.param.u32 %r2, [c_words_ptr];
+    ld.param.u32 %r3, [d_words_ptr];
+    mov.u32 %r4, %tid.x;
+    shl.b32 %r5, %r4, 2;
+    add.u32 %r6, %r5, 128;
+    add.u32 %r7, %r5, 256;
+    add.u32 %r8, %r5, 384;
+
+    add.u32 %r9, %r0, %r5;
+    ld.global.u32 %r14, [%r9];
+    st.shared.u32 [a_tile + %r5], %r14;
+    add.u32 %r9, %r0, %r6;
+    ld.global.u32 %r14, [%r9];
+    st.shared.u32 [a_tile + %r6], %r14;
+    add.u32 %r9, %r0, %r7;
+    ld.global.u32 %r14, [%r9];
+    st.shared.u32 [a_tile + %r7], %r14;
+    add.u32 %r9, %r0, %r8;
+    ld.global.u32 %r14, [%r9];
+    st.shared.u32 [a_tile + %r8], %r14;
+
+    add.u32 %r9, %r1, %r5;
+    ld.global.u32 %r14, [%r9];
+    st.shared.u32 [b_tile + %r5], %r14;
+    add.u32 %r9, %r1, %r6;
+    ld.global.u32 %r14, [%r9];
+    st.shared.u32 [b_tile + %r6], %r14;
+
+    add.u32 %r9, %r2, %r5;
+    ld.global.u32 %r14, [%r9];
+    add.u32 %r9, %r2, %r6;
+    ld.global.u32 %r15, [%r9];
+
+    mov.u32 %r10, a_tile;
+    mov.u32 %r11, 0;
+    mov.u32 %r12, b_tile;
+    mov.u32 %r13, 0;
+    mov.u32 %r16, 17;
+    mov.u32 %r17, 0;
+    mov.u32 %r18, 0;
+
+// Core
+    tcgen05.st.sync.aligned.32x32b.x2.b32 [%r18], {%r14, %r15};
+    tcgen05.wait::st.sync.aligned;
+    tcgen05.mma.cta_group::1.kind::f16 [%r18], {%r10, %r11}, {%r12, %r13}, {%r16, %r17};
+    tcgen05.commit.cta_group::1.sync.aligned;
+    tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r14, %r15}, [%r18];
+    tcgen05.wait::ld.sync.aligned;
+
+    add.u32 %r19, %r3, %r5;
+    st.global.u32 [%r19], %r14;
+    add.u32 %r20, %r3, %r6;
+    st.global.u32 [%r20], %r15;
+
+// Exit
+    ret;
+}

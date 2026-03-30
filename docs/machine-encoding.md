@@ -82,8 +82,14 @@ Immediate and branch offsets are signed 14-bit values.
 | `0x52` | `ldmatrix_x2` | Tensor shared-memory load for two row-major `m8n8` FP16 tiles |
 | `0x53` | `mma_sync_f16` | Warp-level `m16n8k16` FP16 tensor multiply-accumulate |
 | `0x54` | `stmatrix_x2` | Tensor shared-memory store for two row-major `m8n8` FP16 tiles |
+| `0x55` | `tcgen05_ld_x2` | Async Tensor Memory load of one 64-word packed tile into two `%r` tuple beats |
+| `0x56` | `tcgen05_st_x2` | Async Tensor Memory store of one 64-word packed tile from two `%r` tuple beats |
+| `0x57` | `tcgen05_wait_ld` | Wait until the pending tcgen05 load class for the warp clears |
+| `0x58` | `tcgen05_wait_st` | Wait until the pending tcgen05 store class for the warp clears |
+| `0x59` | `tcgen05_mma_cta1_f16` | Async descriptor-driven dense FP16 tcgen05 MMA using shared-memory A/B and TMEM-backed C/D |
+| `0x5A` | `tcgen05_commit_cta1` | Wait until the pending tcgen05 MMA/commit class for the warp clears |
 
-Opcode range `0x40..0x4F` remains reserved for future SFU-machine instructions. Opcode range `0x55..0x5F` remains reserved for future tensor-machine instructions.
+Opcode range `0x40..0x4F` remains reserved for future SFU-machine instructions. Opcode range `0x5B..0x5F` remains reserved for future tensor-machine instructions.
 
 ## Register Model
 
@@ -127,9 +133,10 @@ Opcode range `0x40..0x4F` remains reserved for future SFU-machine instructions. 
 - PTX `mov.v2/v4.f32`, `ld.global.v2/v4.f32`, and `st.global.v2/v4.f32` are frontend tuple spellings only. They lower into repeated scalar `mov`, `ldg`, and `stg` machine instructions, so no dedicated vector opcode exists.
 - `ldg` and `stg` are typeless 32-bit machine-memory ops. PTX `.u32`, `.f32`, `.f16x2`, and the narrow lowered `%gridid` `.u64` path all reuse them.
 - `ldg16` and `stg16` are typeless 16-bit machine-memory ops. PTX `.f16` and packed `.b16` FP8 carrier traffic reuse them.
-- The tensor v1 surface is warp-synchronous only and accepts exactly five PTX spellings: `ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.trans.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.shared::cta.b16`, `mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16`, and `stmatrix.sync.aligned.m8n8.x2.shared::cta.b16`.
-- Tensor ops use `RRRR` base-register encoding rather than scalar lanes: `rd` is the destination tuple base for `ldmatrix` and `mma`, `rs0` is the shared row-address base for `ldmatrix` and `stmatrix`, `rs1` is the B/base-source tuple for `mma` or the source tuple for `stmatrix`, and `rs2` is the C tuple for `mma`.
-- Tensor execution is serialized per sub-SM in v1. The tensor block reuses the existing 3-read/1-write warp register file and single-word shared-memory port through internal operand collection, serialized shared-memory sequencing, and multi-beat writeback.
-- Tensor ops require a full participating warp. Protocol mismatches fault with `tensor_protocol`; bad tensor shared-memory row alignment faults with `misaligned_load_store`.
+- The legacy tensor v1 surface remains warp-synchronous only and accepts exactly five PTX spellings: `ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.trans.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.shared::cta.b16`, `mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16`, and `stmatrix.sync.aligned.m8n8.x2.shared::cta.b16`.
+- The tcgen05 v2 teaching slice accepts exactly six additional PTX spellings: `tcgen05.ld.sync.aligned.32x32b.x2.b32`, `tcgen05.st.sync.aligned.32x32b.x2.b32`, `tcgen05.wait::ld.sync.aligned`, `tcgen05.wait::st.sync.aligned`, `tcgen05.mma.cta_group::1.kind::f16`, and `tcgen05.commit.cta_group::1.sync.aligned`.
+- Tensor ops use `RRRR` base-register encoding rather than scalar lanes. For legacy `ldmatrix`/`mma`/`stmatrix`, `rd/rs0/rs1/rs2` carry `%x` tuple bases and shared row-address bases. For tcgen05, `rd` carries the TMEM address register for `mma` and the destination `%r` tuple base for `ld`, `rs0` carries the TMEM/shared descriptor base for `ld` or `mma`, `rs1` carries the B/source `%r` tuple base, and `rs2` carries the control tuple base.
+- Legacy tensor execution is still serialized per sub-SM. The tcgen05 slice adds an async per-warp scoreboard plus SM-local Tensor Memory, but the datapath itself is still serviced one launched tcgen05 command at a time per partition in this phase.
+- All currently supported tensor ops require a full participating warp. Protocol mismatches fault with `tensor_protocol`; bad tensor shared-memory row alignment faults with `misaligned_load_store`; out-of-range Tensor Memory traffic faults with `tensor_memory`.
 - Instruction fetch remains single-word. Global LSU traffic is burst-capable and coalesces contiguous active-lane 32-bit accesses into multi-beat requests up to `cudaLaneCount` beats.
 - Global LSU traffic now supports both 16-bit and 32-bit accesses. Shared memory remains word-addressed in the current public PTX surface.
