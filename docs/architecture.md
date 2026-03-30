@@ -118,6 +118,25 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 - External memory boundary: `AXI4`
 - Host control boundary: `AXI-Lite`
 
+## Sub-SM Partition FP16 Throughput
+
+One sub-SM partition maps to one local `CudaCoreArray` issue slice. With `SmConfig.default`, that means `cudaLaneCount = subSmIssueWidth = 32`, so one partition covers a full 32-thread warp instruction.
+
+The current throughput model is derived from the latency-gated `CudaCoreArray` issue path, not from an overlapped pipeline peak. A new CUDA arithmetic issue is accepted only when the current one completes, so sustained throughput is computed as work per instruction divided by the configured latency. For this figure, FMA counts as `2 FLOPs`.
+
+- FP16 scalar add/mul: `32 lanes * 1 FLOP / 4 cycles = 8 * f_GHz GFLOP/s`
+- FP16 scalar FMA: `32 lanes * 2 FLOPs / 4 cycles = 16 * f_GHz GFLOP/s`
+- FP16 packed `f16x2` add/mul: `32 lanes * 2 FLOPs / 4 cycles = 16 * f_GHz GFLOP/s`
+- FP8 arithmetic: `0 FLOPs` today on the CUDA path; the current RTL exposes packed FP8 conversion only.
+
+![Sub-SM partition FP16 throughput vs frequency](figures/subsm_partition_fp16_throughput.png)
+
+The plotted H100 NVL markers use the official NVIDIA H100 NVL product brief, which publishes GPU clocks of `1.080 GHz` base and `1.785 GHz` boost. NVIDIA B200 is intentionally omitted from the figure because the cited public NVIDIA B200 pages used in this repo note did not publish a GPU clock:
+
+- H100 NVL product brief: <https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/h100/PB-11773-001_v01.pdf>
+- DGX B200 product page: <https://www.nvidia.com/en-us/data-center/dgx-b200/>
+- DGX B200 user guide: <https://docs.nvidia.com/dgx/dgxb200-user-guide/introduction-to-dgxb200.html>
+
 ## Memory Hierarchy Shape
 
 - Inside one physical SM:

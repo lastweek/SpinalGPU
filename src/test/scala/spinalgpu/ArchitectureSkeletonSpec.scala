@@ -36,6 +36,8 @@ class ArchitectureSkeletonSpec extends AnyFunSuite with Matchers {
       Path.of("docs/architecture.md"),
       Path.of("docs/isa.md"),
       Path.of("docs/machine-encoding.md"),
+      Path.of("docs/scripts/plot_subsm_partition_fp16_throughput.py"),
+      Path.of("docs/figures/subsm_partition_fp16_throughput.png"),
       Path.of("kernels"),
       Path.of("docs/diagrams/sm-overview.mmd"),
       Path.of("docs/diagrams/dispatch-dataflow.mmd"),
