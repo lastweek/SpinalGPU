@@ -2,6 +2,8 @@
 
 This directory contains the checked-in PTX teaching corpus for SpinalGPU.
 
+The executable corpus is PTX-only. A separate source-first CUDA learning ladder lives under `kernels/cuda/`, but those `.cu` files are not compiled by `sbt refreshKernels`, are not loaded by `KernelCorpus`, and are not exercised by the simulation harnesses or repo automation in this first milestone.
+
 Each `.ptx` file is a small, intentionally scoped kernel used to prove one part of the PTX frontend, machine lowering, or SM runtime. The categories are teaching-oriented rather than compiler-oriented:
 
 - `arithmetic/`
@@ -169,3 +171,13 @@ For the current SpinalGPU PTX subset:
 - matrix kernels are built from scalar PTX ops plus 2D indexing and loops
 
 There is no separate packed vector machine ISA yet. Vector PTX is currently a frontend convenience surface over the scalar backend.
+
+## CUDA Learning Track
+
+`kernels/cuda/` is a parallel learning track for handwritten CUDA C++ kernels. It is organized as numbered stages and per-topic optimization ladders:
+
+- one topic directory per concept
+- one `README.md` per topic explaining the ladder
+- numbered `.cu` variants that move from baseline correctness to more performance-aware structure
+
+This is intentionally source-only for now. It exists to study kernel structure and optimization ideas without adding a CUDA toolchain dependency to the repo.

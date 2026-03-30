@@ -76,6 +76,7 @@ Use the small wrappers in `scripts/` for the common inner loop:
 ## Kernel Corpus
 
 - Canonical PTX subset kernel source files live under `kernels/`.
+- CUDA learning kernels live under `kernels/cuda/` as source-only study material.
 - Generated raw machine-code binaries are written under `generated/kernels/`.
 - The corpus is organized by primary feature:
   - `kernels/arithmetic/`
@@ -83,6 +84,10 @@ Use the small wrappers in `scripts/` for the common inner loop:
   - `kernels/global_memory/`
   - `kernels/shared_memory/`
   - `kernels/special_registers/`
+- `kernels/cuda/` is intentionally separate from the executable PTX corpus:
+  - `.cu` files are not compiled by `sbt refreshKernels`
+  - `.cu` files are not loaded by `KernelCorpus` or the simulation harnesses
+  - `.cu` files are not covered by repo automation in this first milestone
 - [`src/main/scala/spinalgpu/toolchain/KernelCorpus.scala`](src/main/scala/spinalgpu/toolchain/KernelCorpus.scala) is the single source of truth for PTX source paths, generated binary paths, launch config, preload image, expected outcome, and harness coverage.
 - [`src/test/scala/spinalgpu/KernelCorpusTestUtils.scala`](src/test/scala/spinalgpu/KernelCorpusTestUtils.scala) is the shared runner used by the corpus-backed simulation specs.
 - Success vs fault classification is stored in typed declarative expectations, not in directory names.
@@ -139,6 +144,7 @@ Each teaching kernel follows one strict file template:
 - `src/test/scala/spinalgpu/PtxAssemblerSpec.scala`: PTX subset compiler and binary-emission tests.
 - `src/test/scala/spinalgpu/ArchitectureSkeletonSpec.scala`: elaboration sweep and doc/diagram checks.
 - `kernels/`: feature-organized PTX subset corpus for end-to-end execution tests.
+- `kernels/cuda/`: source-only CUDA learning ladder for performance-study kernels, organized from foundations to LLM-style building blocks.
 - `generated/kernels/`: generated raw binaries loaded by the simulation harnesses.
 - `scripts/`: small local workflow helpers for fast test, watch mode, Verilog generation, and full checks.
 - `docs/`: architecture notes, ISA reference, machine-encoding reference, and Mermaid diagrams for the SM/frontend design.
@@ -149,3 +155,4 @@ Each teaching kernel follows one strict file template:
 - The public software-visible ISA is a PTX subset, not the internal machine encoding.
 - The current hardware still executes fixed-width 32-bit SpinalGPU machine words loaded from raw `.bin` files.
 - The PTX compiler is intentionally educational and correctness-first, not a full `nvcc`-compatible PTX implementation.
+- The CUDA learning ladder is documentation-plus-source only; it becomes runnable later in a CUDA-capable environment, but it does not change the default repo contract today.
