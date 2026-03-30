@@ -13,6 +13,7 @@ val scalaTest = "org.scalatest" %% "scalatest" % scalaTestVersion % Test
 val buildKernelCorpus = taskKey[Unit]("Compile the PTX kernel corpus into generated/kernels")
 val buildTensorKernelCorpus = taskKey[Unit]("Compile only the tensor PTX kernel subset into generated/kernels")
 val buildTcgen05KernelCorpus = taskKey[Unit]("Compile only the tcgen05 PTX kernel subset into generated/kernels")
+val buildBenchmarkKernelCorpus = taskKey[Unit]("Compile only the GEMM benchmark PTX kernel subset into generated/kernels")
 
 lazy val root = (project in file("."))
   .settings(
@@ -28,9 +29,9 @@ lazy val root = (project in file("."))
     Test / fork := true,
     Test / javaOptions ++= Seq(
       "-Xms1024m",
-      "-Xmx4096m",
+      "-Xmx8192m",
       "-Xss4M",
-      "-XX:ReservedCodeCacheSize=128m"
+      "-XX:ReservedCodeCacheSize=256m"
     ),
     Test / parallelExecution := false,
     buildKernelCorpus := Def.taskDyn {
@@ -42,6 +43,9 @@ lazy val root = (project in file("."))
     buildTcgen05KernelCorpus := Def.taskDyn {
       (Compile / runMain).toTask(" spinalgpu.toolchain.BuildTcgen05KernelCorpus")
     }.value,
+    buildBenchmarkKernelCorpus := Def.taskDyn {
+      (Compile / runMain).toTask(" spinalgpu.toolchain.BuildBenchmarkKernelCorpus")
+    }.value,
     Test / test := ((Test / test) dependsOn buildKernelCorpus).value
   )
 
@@ -50,6 +54,7 @@ fork := true
 addCommandAlias("refreshKernels", "runMain spinalgpu.toolchain.BuildKernelCorpus")
 addCommandAlias("refreshTensorKernels", "runMain spinalgpu.toolchain.BuildTensorKernelCorpus")
 addCommandAlias("refreshTcgen05Kernels", "runMain spinalgpu.toolchain.BuildTcgen05KernelCorpus")
+addCommandAlias("refreshBenchmarkKernels", "runMain spinalgpu.toolchain.BuildBenchmarkKernelCorpus")
 addCommandAlias("devTest", "Test / runMain org.scalatest.tools.Runner -o -s spinalgpu.DevRegressionSpec")
 addCommandAlias("smokeTest", "Test / runMain org.scalatest.tools.Runner -o -s spinalgpu.ExecutionSmokeSpec")
 addCommandAlias("multiSmSmoke", "testOnly spinalgpu.MultiSmGpuTopSpec")
@@ -60,5 +65,9 @@ addCommandAlias(
 addCommandAlias(
   "tcgen05Test",
   ";runMain spinalgpu.toolchain.BuildTcgen05KernelCorpus;testOnly spinalgpu.Tcgen05ArchitectureSpec spinalgpu.Tcgen05FrontendSpec spinalgpu.Tcgen05BlockSpec spinalgpu.StreamingMultiprocessorTcgen05Spec spinalgpu.GpuTopTcgen05Spec spinalgpu.Tcgen05OverlapProgressSpec"
+)
+addCommandAlias(
+  "gemmPerfCompare",
+  ";runMain spinalgpu.toolchain.BuildBenchmarkKernelCorpus;Test / runMain spinalgpu.GpuTopGemmPerfComparison"
 )
 addCommandAlias("fullTest", "test")

@@ -1,0 +1,251 @@
+// Purpose: Compare the tcgen05 tensor path against the CUDA-core FP16 GEMM baseline with a one-CTA full-matrix benchmark.
+// Primary feature: tensor_core
+// Expected outcome: success
+// High-level execution flow:
+// - One CTA owns the whole matrix, with four warps cooperatively covering the `16 x 8` tensor tiles.
+// - Each warp walks all tile coordinates, claims the tiles where `(tile_index & 3) == warp_id`, stages A/B into warp-private shared buffers, and accumulates through `tcgen05.mma`.
+// - The warp drains the final TMEM tile back to row-major global memory before moving to its next assigned output tile.
+// Where this fits:
+// - This is the tensor-core side of the GEMM benchmark pair.
+// - It keeps the benchmark runnable on the single-SM harness by avoiding multi-CTA launch requirements while still exercising real tcgen05 MMA work.
+// Key model details:
+// - `blockDim = (32, 4, 1)` gives four warps per CTA, and each warp uses its own shared-memory A/B staging region plus its own TMEM window.
+// - The benchmark support layer only launches aligned shapes where `m % 16 == 0`, `n % 8 == 0`, and `k % 16 == 0`.
+// - TMEM is zeroed once per output tile, then reused across all `k` tiles with control word `0x11` to enable D-from-TMEM accumulation.
+// CUDA-equivalent sketch (.cu):
+// __global__ void tcgen05_gemm_f16(const half* A, const half* B, half* C,
+//                                  unsigned m, unsigned n, unsigned k,
+//                                  unsigned lda, unsigned ldb, unsigned ldc) {
+//   unsigned warp_id = threadIdx.y;
+//   for (unsigned tile_index = 0, row = 0; row < m; row += 16) {
+//     for (unsigned col = 0; col < n; col += 8, ++tile_index) {
+//       if ((tile_index & 3) == warp_id) {
+//         // Stage one tile, issue tcgen05.mma across the k-loop, then store one 16x8 output tile.
+//       }
+//     }
+//   }
+// }
+// SpinalGPU note:
+// - This uses the repo's narrow tcgen05 teaching slice: fixed warp-local TMEM windows, `%r` descriptor tuples, and commit-after-each-step semantics.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry tcgen05_gemm_f16(
+    .param .u32 A_ptr,
+    .param .u32 B_ptr,
+    .param .u32 C_ptr,
+    .param .u32 m,
+    .param .u32 n,
+    .param .u32 k,
+    .param .u32 lda,
+    .param .u32 ldb,
+    .param .u32 ldc
+)
+{
+    .reg .u32 %r<28>;
+    .pred %p<2>;
+    .shared .align 16 .b8 a_tile[2048];
+    .shared .align 16 .b8 b_tile[1024];
+
+// Setup
+    ld.param.u32 %r0, [A_ptr];
+    ld.param.u32 %r1, [B_ptr];
+    ld.param.u32 %r2, [C_ptr];
+    ld.param.u32 %r3, [m];
+    ld.param.u32 %r4, [n];
+    ld.param.u32 %r5, [k];
+    ld.param.u32 %r6, [lda];
+    ld.param.u32 %r7, [ldb];
+    ld.param.u32 %r8, [ldc];
+    mov.u32 %r9, %tid.x;
+    mov.u32 %r10, %tid.y;
+    shl.b32 %r11, %r9, 2;
+    mov.u32 %r12, a_tile;
+    shl.b32 %r26, %r10, 9;
+    add.u32 %r12, %r12, %r26;
+    mov.u32 %r13, 0;
+    mov.u32 %r14, b_tile;
+    shl.b32 %r26, %r10, 8;
+    add.u32 %r14, %r14, %r26;
+    mov.u32 %r15, 0;
+    mov.u32 %r16, 17;
+    mov.u32 %r17, 0;
+    mov.u32 %r18, 0;
+    mov.u32 %r19, 0;
+    mov.u32 %r20, 0;
+
+// Core
+row_loop:
+    setp.lt.u32 %p0, %r20, %r3;
+    @!%p0 bra done;
+
+    mov.u32 %r21, 0;
+
+col_loop:
+    setp.lt.u32 %p1, %r21, %r4;
+    @!%p1 bra next_row;
+
+    and.b32 %r25, %r19, 3;
+    setp.eq.u32 %p0, %r25, %r10;
+    @!%p0 bra advance_tile;
+
+    mov.u32 %r26, 0;
+    mov.u32 %r27, 0;
+    tcgen05.st.sync.aligned.32x32b.x2.b32 [%r18], {%r26, %r27};
+    tcgen05.wait::st.sync.aligned;
+
+    mov.u32 %r22, 0;
+
+tile_k_loop:
+    setp.lt.u32 %p0, %r22, %r5;
+    @!%p0 bra drain_result;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 3;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 7;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r22;
+    add.u32 %r25, %r20, %r23;
+    mul.lo.u32 %r25, %r25, %r6;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r0, %r25;
+    ld.global.u32 %r25, [%r25];
+    add.u32 %r26, %r12, %r11;
+    st.shared.u32 [%r26], %r25;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 3;
+    add.u32 %r23, %r23, 4;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 7;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r22;
+    add.u32 %r25, %r20, %r23;
+    mul.lo.u32 %r25, %r25, %r6;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r0, %r25;
+    ld.global.u32 %r25, [%r25];
+    add.u32 %r26, %r11, 128;
+    add.u32 %r26, %r12, %r26;
+    st.shared.u32 [%r26], %r25;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 3;
+    add.u32 %r23, %r23, 8;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 7;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r22;
+    add.u32 %r25, %r20, %r23;
+    mul.lo.u32 %r25, %r25, %r6;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r0, %r25;
+    ld.global.u32 %r25, [%r25];
+    add.u32 %r26, %r11, 256;
+    add.u32 %r26, %r12, %r26;
+    st.shared.u32 [%r26], %r25;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 3;
+    add.u32 %r23, %r23, 12;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 7;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r22;
+    add.u32 %r25, %r20, %r23;
+    mul.lo.u32 %r25, %r25, %r6;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r0, %r25;
+    ld.global.u32 %r25, [%r25];
+    add.u32 %r26, %r11, 384;
+    add.u32 %r26, %r12, %r26;
+    st.shared.u32 [%r26], %r25;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 2;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 3;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r21;
+    add.u32 %r25, %r22, %r23;
+    mul.lo.u32 %r25, %r25, %r7;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r1, %r25;
+    ld.global.u32 %r25, [%r25];
+    add.u32 %r26, %r14, %r11;
+    st.shared.u32 [%r26], %r25;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 2;
+    add.u32 %r23, %r23, 8;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 3;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r21;
+    add.u32 %r25, %r22, %r23;
+    mul.lo.u32 %r25, %r25, %r7;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r1, %r25;
+    ld.global.u32 %r25, [%r25];
+    add.u32 %r26, %r11, 128;
+    add.u32 %r26, %r14, %r26;
+    st.shared.u32 [%r26], %r25;
+
+    tcgen05.mma.cta_group::1.kind::f16 [%r18], {%r12, %r13}, {%r14, %r15}, {%r16, %r17};
+    tcgen05.commit.cta_group::1.sync.aligned;
+    add.u32 %r22, %r22, 16;
+    bra tile_k_loop;
+
+drain_result:
+    tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r26, %r27}, [%r18];
+    tcgen05.wait::ld.sync.aligned;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 2;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 3;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r21;
+    add.u32 %r25, %r20, %r23;
+    mul.lo.u32 %r25, %r25, %r8;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r2, %r25;
+    st.global.u32 [%r25], %r26;
+
+    mov.u32 %r23, %r9;
+    shr.b32 %r23, %r23, 2;
+    add.u32 %r23, %r23, 8;
+    mov.u32 %r24, %r9;
+    and.b32 %r24, %r24, 3;
+    shl.b32 %r24, %r24, 1;
+    add.u32 %r24, %r24, %r21;
+    add.u32 %r25, %r20, %r23;
+    mul.lo.u32 %r25, %r25, %r8;
+    add.u32 %r25, %r25, %r24;
+    shl.b32 %r25, %r25, 1;
+    add.u32 %r25, %r2, %r25;
+    st.global.u32 [%r25], %r27;
+
+advance_tile:
+    add.u32 %r19, %r19, 1;
+    add.u32 %r21, %r21, 8;
+    bra col_loop;
+
+next_row:
+    add.u32 %r20, %r20, 16;
+    bra row_loop;
+
+// Exit
+done:
+    ret;
+}

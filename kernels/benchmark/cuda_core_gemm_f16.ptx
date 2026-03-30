@@ -1,0 +1,120 @@
+// Purpose: Compare CUDA-core FP16 GEMM performance against the tcgen05 tensor path with a one-CTA full-matrix benchmark.
+// Primary feature: floating_point
+// Expected outcome: success
+// High-level execution flow:
+// - One CTA covers the whole matrix by striding each thread over rows and columns.
+// - Every thread loops over its assigned `(row, col)` outputs, walks the shared `k` dimension, and accumulates with `fma.rn.f16`.
+// - The final FP16 accumulator is written back to the row-major output matrix.
+// Where this fits:
+// - This is the CUDA-core side of the GEMM benchmark pair.
+// - It provides the scalar FP16 baseline that the benchmark compares against the tcgen05 tile path without depending on multi-CTA launch support.
+// Key model details:
+// - `blockDim = (8, 16, 1)` gives one 128-thread CTA; each thread walks `row += 16` and `col += 8` to cover larger matrices.
+// - Inputs and outputs are row-major FP16 matrices, and `lda/ldb/ldc` are measured in FP16 elements.
+// - This kernel is intentionally untiled and uses only global memory so the tensor-path comparison remains easy to explain.
+// CUDA-equivalent sketch (.cu):
+// __global__ void cuda_core_gemm_f16(const half* A, const half* B, half* C,
+//                                    unsigned m, unsigned n, unsigned k,
+//                                    unsigned lda, unsigned ldb, unsigned ldc) {
+//   for (unsigned row = threadIdx.y; row < m; row += blockDim.y) {
+//     for (unsigned col = threadIdx.x; col < n; col += blockDim.x) {
+//       half acc = __float2half(0.0f);
+//       for (unsigned kk = 0; kk < k; ++kk) {
+//         acc = __hfma(A[row * lda + kk], B[kk * ldb + col], acc);
+//       }
+//       C[row * ldc + col] = acc;
+//     }
+//   }
+// }
+// SpinalGPU note:
+// - This benchmark kernel uses the repo's current scalar FP16 CUDA-core path in a single-CTA form so it can run on the lightweight single-SM harness.
+
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry cuda_core_gemm_f16(
+    .param .u32 A_ptr,
+    .param .u32 B_ptr,
+    .param .u32 C_ptr,
+    .param .u32 m,
+    .param .u32 n,
+    .param .u32 k,
+    .param .u32 lda,
+    .param .u32 ldb,
+    .param .u32 ldc
+)
+{
+    .reg .u32 %r<21>;
+    .reg .f16 %h<3>;
+    .pred %p<2>;
+
+// Setup
+    ld.param.u32 %r0, [A_ptr];
+    ld.param.u32 %r1, [B_ptr];
+    ld.param.u32 %r2, [C_ptr];
+    ld.param.u32 %r3, [m];
+    ld.param.u32 %r4, [n];
+    ld.param.u32 %r5, [k];
+    ld.param.u32 %r6, [lda];
+    ld.param.u32 %r7, [ldb];
+    ld.param.u32 %r8, [ldc];
+    mov.u32 %r9, %tid.x;
+    mov.u32 %r10, %tid.y;
+    mov.u32 %r11, %ntid.x;
+    mov.u32 %r12, %ntid.y;
+    mov.u32 %r13, %r10;
+
+// Core
+row_loop:
+    setp.lt.u32 %p0, %r13, %r3;
+    @!%p0 bra done;
+
+    mov.u32 %r14, %r9;
+
+col_loop:
+    setp.lt.u32 %p1, %r14, %r4;
+    @!%p1 bra next_row;
+
+    mov.u32 %r15, 0;
+    mov.f16 %h0, %r15;
+
+loop_k:
+    setp.lt.u32 %p0, %r15, %r5;
+    @!%p0 bra store_result;
+
+    mul.lo.u32 %r16, %r13, %r6;
+    add.u32 %r16, %r16, %r15;
+    shl.b32 %r16, %r16, 1;
+    add.u32 %r17, %r0, %r16;
+
+    mul.lo.u32 %r18, %r15, %r7;
+    add.u32 %r18, %r18, %r14;
+    shl.b32 %r18, %r18, 1;
+    add.u32 %r19, %r1, %r18;
+
+    ld.global.f16 %h1, [%r17];
+    ld.global.f16 %h2, [%r19];
+    fma.rn.f16 %h0, %h1, %h2, %h0;
+
+    add.u32 %r15, %r15, 1;
+    bra loop_k;
+
+store_result:
+    mul.lo.u32 %r20, %r13, %r8;
+    add.u32 %r20, %r20, %r14;
+    shl.b32 %r20, %r20, 1;
+    add.u32 %r20, %r2, %r20;
+    st.global.f16 [%r20], %h0;
+
+    add.u32 %r14, %r14, %r11;
+    bra col_loop;
+
+next_row:
+    add.u32 %r13, %r13, %r12;
+    bra row_loop;
+
+// Exit
+done:
+    ret;
+}

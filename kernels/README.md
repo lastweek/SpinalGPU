@@ -8,6 +8,8 @@ Each `.ptx` file is a small, intentionally scoped kernel used to prove one part 
 
 - `arithmetic/`
   scalar, vector, matrix, and ML-shaped numeric kernels
+- `benchmark/`
+  benchmark-only PTX kernels built by the dedicated GEMM comparison flow rather than the default teaching corpus
 - `control/`
   loop, branch, and trap behavior
 - `global_memory/`
@@ -183,3 +185,22 @@ There is no separate packed vector machine ISA yet. Vector PTX is currently a fr
 - numbered `.cu` variants that move from baseline correctness to more performance-aware structure
 
 This is intentionally source-only for now. It exists to study kernel structure and optimization ideas without adding a CUDA toolchain dependency to the repo.
+
+## Benchmark Kernels
+
+`benchmark/` is intentionally separate from the default teaching corpus.
+
+- `benchmark/cuda_core_gemm_f16.ptx`
+  CUDA-core FP16 GEMM baseline used by the top-level comparison flow
+- `benchmark/tcgen05_gemm_f16.ptx`
+  tcgen05 FP16 GEMM benchmark kernel used by the same comparison flow
+
+Practical meaning:
+
+- build only the benchmark kernels with `sbt refreshBenchmarkKernels`
+- run the benchmark comparison with `sbt gemmPerfCompare`
+- run one quick benchmark size with `sbt "Test / runMain spinalgpu.GpuTopGemmPerfComparison 16"`
+- the comparison artifacts are written under `generated/benchmarks/`
+- the reported “time” is deterministic `StreamingMultiprocessor` completion cycles, not host wall-clock runtime
+- the benchmark uses a dedicated one-SM, one-subSM config with `residentWarpsPerSubSm=4` so the CUDA-core `128`-thread CTA and the tcgen05 warp tile can be compared in the same runnable SM harness
+- the current sweep uses aligned square shapes only: `M=N=K ∈ {16, 32, 48, 64}`

@@ -8,6 +8,8 @@ import spinal.core.sim._
 import spinal.lib.bus.amba4.axi.sim._
 import spinal.lib.bus.amba4.axilite.AxiLite4
 import spinal.lib.bus.amba4.axilite.sim._
+import spinalgpu.toolchain.BenchmarkKernelCatalog
+import spinalgpu.toolchain.BuildBenchmarkKernelCorpus
 import spinalgpu.toolchain.BuildKernelCorpus
 import spinalgpu.toolchain.BuildTcgen05KernelCorpus
 import spinalgpu.toolchain.BuildTensorKernelCorpus
@@ -30,6 +32,7 @@ object ExecutionTestUtils {
   @volatile private var kernelCorpusReady: Boolean = false
   @volatile private var tensorKernelCorpusReady: Boolean = false
   @volatile private var tcgen05KernelCorpusReady: Boolean = false
+  @volatile private var benchmarkKernelCorpusReady: Boolean = false
 
   /** Rebuilds generated kernel binaries on demand when a corpus-backed test references a missing `.bin`. */
   def ensureKernelCorpusBuilt(): Unit = synchronized {
@@ -58,6 +61,15 @@ object ExecutionTestUtils {
     }
   }
 
+  /** Rebuilds only the benchmark subset on demand so benchmark workflows avoid the default corpus path. */
+  def ensureBenchmarkKernelCorpusBuilt(): Unit = synchronized {
+    val missingBinary = BenchmarkKernelCatalog.all.exists(kernel => !Files.exists(kernel.binaryPath))
+    if (!benchmarkKernelCorpusReady || missingBinary) {
+      BuildBenchmarkKernelCorpus.buildAll()
+      benchmarkKernelCorpusReady = true
+    }
+  }
+
   def loadBinary(memory: AxiMemorySim, baseAddress: Long, words: Seq[Int], byteCount: Int): Unit = {
     words.zipWithIndex.foreach { case (word, index) =>
       writeWord(memory, baseAddress + (index.toLong * byteCount), u32(word), byteCount)
@@ -69,6 +81,8 @@ object ExecutionTestUtils {
     if (path.normalize.startsWith(KernelCorpus.outputRoot) && (!kernelCorpusReady || !Files.exists(path))) {
       if (KernelCorpus.tcgen05Cases.exists(_.binaryPath.normalize() == path.normalize())) {
         ensureTcgen05KernelCorpusBuilt()
+      } else if (BenchmarkKernelCatalog.all.exists(_.binaryPath.normalize() == path.normalize())) {
+        ensureBenchmarkKernelCorpusBuilt()
       } else if (KernelCorpus.tensorCases.exists(_.binaryPath.normalize() == path.normalize())) {
         ensureTensorKernelCorpusBuilt()
       } else {

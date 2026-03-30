@@ -16,6 +16,12 @@ import spinalgpu.toolchain.KernelCorpus._
   */
 object KernelCorpusTestUtils {
   private final case class FaultObservation(fault: Boolean, code: BigInt, faultPc: BigInt)
+  final case class GpuTopExecutionObservation(
+      cycles: Int,
+      fault: Boolean,
+      faultCode: BigInt,
+      faultPc: BigInt
+  )
   private object CompiledHarnessCache {
     private val streamingMultiprocessorByConfig =
       scala.collection.mutable.HashMap.empty[GpuConfig, SimCompiled[StreamingMultiprocessor]]
@@ -62,23 +68,24 @@ object KernelCorpusTestUtils {
   private def gpuTopCaseListFor(kernel: KernelCase): Seq[KernelCase] =
     if (KernelCorpus.multiSmGpuTopCases.contains(kernel)) KernelCorpus.multiSmGpuTopCases else KernelCorpus.gpuTopCases
 
-  private def waitForGpuTopCompletion(
+  def waitForGpuTopCompletion(
       dut: GpuTop,
       hostControlBus: AxiLite4,
       clockDomain: ClockDomain,
-      kernel: KernelCase
-  ): FaultObservation = {
+      timeoutCycles: Int,
+      label: String
+  ): GpuTopExecutionObservation = {
     // Wait on the live completion signal, then read the latched AXI-Lite status once.
     // Repeated AXI-Lite polling here made long-running simulations consume excessive memory.
     var cycles = 0
-    while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < kernel.timeoutCycles) {
+    while (!dut.io.debugExecutionStatus.done.toBoolean && cycles < timeoutCycles) {
       clockDomain.waitSampling()
       cycles += 1
     }
 
     assert(
       dut.io.debugExecutionStatus.done.toBoolean,
-      s"${kernel.name} (${kernel.relativeSourcePath}) did not complete after $cycles cycles; " +
+      s"$label did not complete after $cycles cycles; " +
         s"busy=${dut.io.debugExecutionStatus.busy.toBoolean} " +
         s"fault=${dut.io.debugExecutionStatus.fault.toBoolean} " +
         s"faultCode=${dut.io.debugExecutionStatus.faultCode.toBigInt} " +
@@ -87,9 +94,10 @@ object KernelCorpusTestUtils {
 
     val status = ExecutionTestUtils.readExecutionStatus(hostControlBus, clockDomain)
     val fault = ((status >> 2) & 1) == 1
-    FaultObservation(
+    GpuTopExecutionObservation(
+      cycles = cycles,
       fault = fault,
-      code = ExecutionTestUtils.readFaultCode(hostControlBus, clockDomain),
+      faultCode = ExecutionTestUtils.readFaultCode(hostControlBus, clockDomain),
       faultPc = ExecutionTestUtils.readFaultPc(hostControlBus, clockDomain)
     )
   }
@@ -256,14 +264,24 @@ object KernelCorpusTestUtils {
 
       loadKernelCase(memory, kernel, config.byteCount)
       ExecutionTestUtils.submitKernelCommand(dut.io.hostControl, dut.coreClockDomain, kernel.command)
-      val observation = waitForGpuTopCompletion(dut, dut.io.hostControl, dut.coreClockDomain, kernel)
+      val observation = waitForGpuTopCompletion(
+        dut,
+        dut.io.hostControl,
+        dut.coreClockDomain,
+        timeoutCycles = kernel.timeoutCycles,
+        label = s"${kernel.name} (${kernel.relativeSourcePath})"
+      )
       dut.coreClockDomain.waitSampling(8)
 
       assertKernelExpectation(
         memory,
         kernel,
         config.byteCount,
-        observation
+        FaultObservation(
+          fault = observation.fault,
+          code = observation.faultCode,
+          faultPc = observation.faultPc
+        )
       )
 
       memory.stop()
