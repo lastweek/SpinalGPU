@@ -171,9 +171,23 @@ class DecodeUnit(config: SmConfig) extends Component {
         io.decoded.usesRs0 := True
       } elsewhen (opcodeUInt >= Opcode.tensorBase && opcodeUInt <= Opcode.tensorLast) {
         io.decoded.target := ExecutionUnitKind.TENSOR
-        io.decoded.writesRd := True
         io.decoded.usesRs0 := True
-        io.decoded.usesRs1 := True
+        switch(opcode) {
+          is(B(Opcode.LDMATRIX_X4, 8 bits), B(Opcode.LDMATRIX_X2_TRANS, 8 bits), B(Opcode.LDMATRIX_X2, 8 bits)) {
+            io.decoded.writesRd := True
+          }
+          is(B(Opcode.MMA_SYNC_F16_F16_F16_F16, 8 bits)) {
+            io.decoded.writesRd := True
+            io.decoded.usesRs1 := True
+            io.decoded.usesRs2 := True
+          }
+          is(B(Opcode.STMATRIX_X2, 8 bits)) {
+            io.decoded.usesRs1 := True
+          }
+          default {
+            io.decoded.illegal := True
+          }
+        }
       } otherwise {
         io.decoded.illegal := True
       }

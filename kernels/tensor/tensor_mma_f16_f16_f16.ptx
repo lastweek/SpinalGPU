@@ -1,0 +1,121 @@
+// Purpose: Execute one real tensor-core FP16 matrix multiply-accumulate tile and store the FP16 result tile.
+// Primary feature: tensor_core
+// Expected outcome: success
+//
+// High-level execution flow:
+// - The warp stages four A tiles, two B tiles, and two C tiles from global memory into shared memory.
+// - It issues `ldmatrix` for A, B, and C fragments, then performs one `mma.sync.aligned.m16n8k16`.
+// - The resulting D fragments are written back with `stmatrix` and drained to global memory as packed row-major words.
+//
+// Where this fits:
+// - This is the minimal end-to-end tensor MMA teaching kernel.
+// - It proves the warp-synchronous `ldmatrix + mma + stmatrix` path without adding tiling loops or barriers.
+//
+// Key model details:
+// - The host pre-packs A, B, and C as the exact 32-bit shared-memory row words expected by the tensor instructions.
+// - A is four 8x8 row-major tiles, while B and C are two 8x8 row-major tiles stacked vertically.
+// - The tensor op itself is FP16 input, FP16 accumulate, FP16 output.
+//
+// CUDA-equivalent sketch (.cu):
+// __global__ void tensor_mma_f16(const uint32_t* a_words, const uint32_t* b_words,
+//                                const uint32_t* c_words, uint32_t* d_words) {
+//   __shared__ uint32_t a_tile[128];
+//   __shared__ uint32_t b_tile[64];
+//   __shared__ uint32_t c_tile[64];
+//   __shared__ uint32_t d_tile[64];
+//   unsigned lane = threadIdx.x;
+//   // Stage row-major words, issue ldmatrix + mma + stmatrix, then write d_tile back.
+// }
+//
+// SpinalGPU note:
+// - The kernel is intentionally fragment-centric: the host packs the tensor tiles so the hardware path is the thing under test.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry tensor_mma_f16_f16_f16(
+    .param .u32 a_words_ptr,
+    .param .u32 b_words_ptr,
+    .param .u32 c_words_ptr,
+    .param .u32 d_words_ptr
+)
+{
+    .reg .u32 %r<18>;
+    .reg .f16x2 %x<10>;
+    .shared .align 16 .b8 a_tile[512];
+    .shared .align 16 .b8 b_tile[256];
+    .shared .align 16 .b8 c_tile[256];
+    .shared .align 16 .b8 d_tile[256];
+
+// Setup
+    ld.param.u32 %r0, [a_words_ptr];
+    ld.param.u32 %r1, [b_words_ptr];
+    ld.param.u32 %r2, [c_words_ptr];
+    ld.param.u32 %r3, [d_words_ptr];
+    mov.u32 %r4, %tid.x;
+    shl.b32 %r5, %r4, 2;
+    add.u32 %r6, %r5, 128;
+    add.u32 %r7, %r5, 256;
+    add.u32 %r8, %r5, 384;
+
+    add.u32 %r9, %r0, %r5;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [a_tile + %r5], %r10;
+    add.u32 %r9, %r0, %r6;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [a_tile + %r6], %r10;
+    add.u32 %r9, %r0, %r7;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [a_tile + %r7], %r10;
+    add.u32 %r9, %r0, %r8;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [a_tile + %r8], %r10;
+
+    add.u32 %r9, %r1, %r5;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [b_tile + %r5], %r10;
+    add.u32 %r9, %r1, %r6;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [b_tile + %r6], %r10;
+
+    add.u32 %r9, %r2, %r5;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [c_tile + %r5], %r10;
+    add.u32 %r9, %r2, %r6;
+    ld.global.u32 %r10, [%r9];
+    st.shared.u32 [c_tile + %r6], %r10;
+
+    and.b32 %r11, %r4, 7;
+    shr.b32 %r12, %r4, 3;
+    shl.b32 %r12, %r12, 7;
+    shl.b32 %r13, %r11, 4;
+    mov.u32 %r14, a_tile;
+    add.u32 %r14, %r14, %r12;
+    add.u32 %r14, %r14, %r13;
+    mov.u32 %r15, b_tile;
+    add.u32 %r15, %r15, %r12;
+    add.u32 %r15, %r15, %r13;
+    mov.u32 %r16, c_tile;
+    add.u32 %r16, %r16, %r12;
+    add.u32 %r16, %r16, %r13;
+    mov.u32 %r17, d_tile;
+    add.u32 %r17, %r17, %r12;
+    add.u32 %r17, %r17, %r13;
+
+// Core
+    ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16 {%x0, %x1, %x2, %x3}, [%r14];
+    ldmatrix.sync.aligned.m8n8.x2.trans.shared::cta.b16 {%x4, %x5}, [%r15];
+    ldmatrix.sync.aligned.m8n8.x2.shared::cta.b16 {%x6, %x7}, [%r16];
+    mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 {%x8, %x9}, {%x0, %x1, %x2, %x3}, {%x4, %x5}, {%x6, %x7};
+    stmatrix.sync.aligned.m8n8.x2.shared::cta.b16 [%r17], {%x8, %x9};
+
+    ld.shared.u32 %r10, [d_tile + %r5];
+    add.u32 %r9, %r3, %r5;
+    st.global.u32 [%r9], %r10;
+    ld.shared.u32 %r10, [d_tile + %r6];
+    add.u32 %r9, %r3, %r6;
+    st.global.u32 [%r9], %r10;
+
+// Exit
+    ret;
+}

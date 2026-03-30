@@ -90,7 +90,7 @@ This repository now models a chip-level SpinalGPU cluster with one or more physi
 | `CudaCoreArray` | Local CUDA arithmetic path inside each partition | Scalar FP32, scalar/packed FP16, packed FP8 conversion, integer ALU, and compare/select issue path |
 | `LoadStoreUnit` | Local LSU inside each partition | Shared-memory routing plus 16-bit and 32-bit global-memory traffic |
 | `SpecialFunctionUnit` | Local SFU inside each partition | Placeholder vector unary transform |
-| `TensorCoreBlock` | Local tensor path inside each partition | Placeholder vector multiply-style response |
+| `TensorCoreBlock` | Local tensor path inside each partition | Warp-synchronous `ldmatrix` / `mma.sync` / `stmatrix` v1 with serialized RF/shared-memory sequencing |
 | `L1DataSharedMemory` | Shared data/shared-memory fabric across sub-SMs | Arbitrates local LSU traffic |
 | `SharedMemory` | SM-local shared memory backing store | Single-port word-addressed memory with clear support; the public PTX surface is still 32-bit only here |
 | `ExternalMemoryArbiter` | Shares the external memory path between instruction and data fabrics | One fetch side plus one LSU side |

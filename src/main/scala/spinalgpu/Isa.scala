@@ -50,6 +50,11 @@ object Opcode {
   val CVTF16X2E5M2X2 = 0x38
   val CVTE4M3X2F16X2 = 0x39
   val CVTE5M2X2F16X2 = 0x3A
+  val LDMATRIX_X4 = 0x50
+  val LDMATRIX_X2_TRANS = 0x51
+  val LDMATRIX_X2 = 0x52
+  val MMA_SYNC_F16_F16_F16_F16 = 0x53
+  val STMATRIX_X2 = 0x54
 
   val sfuBase = 0x40
   val sfuLast = 0x4F
@@ -103,7 +108,12 @@ object Opcode {
     CVTF16X2E4M3X2 -> "cvtf16x2e4m3x2",
     CVTF16X2E5M2X2 -> "cvtf16x2e5m2x2",
     CVTE4M3X2F16X2 -> "cvte4m3x2f16x2",
-    CVTE5M2X2F16X2 -> "cvte5m2x2f16x2"
+    CVTE5M2X2F16X2 -> "cvte5m2x2f16x2",
+    LDMATRIX_X4 -> "ldmatrix_x4",
+    LDMATRIX_X2_TRANS -> "ldmatrix_x2_trans",
+    LDMATRIX_X2 -> "ldmatrix_x2",
+    MMA_SYNC_F16_F16_F16_F16 -> "mma_sync_f16",
+    STMATRIX_X2 -> "stmatrix_x2"
   )
 
   val byName: Map[String, Int] = names.map(_.swap)
@@ -185,6 +195,7 @@ object FaultCode {
   val NonUniformBranch = 5
   val Trap = 6
   val ExternalMemory = 7
+  val TensorProtocol = 8
 
   val names: Map[Int, String] = Map(
     None -> "none",
@@ -194,7 +205,8 @@ object FaultCode {
     MisalignedLoadStore -> "misaligned_load_store",
     NonUniformBranch -> "non_uniform_branch",
     Trap -> "trap",
-    ExternalMemory -> "external_memory"
+    ExternalMemory -> "external_memory",
+    TensorProtocol -> "tensor_protocol"
   )
 }
 
@@ -310,7 +322,8 @@ object Isa {
             Opcode.FABS | Opcode.FNEG | Opcode.FSETEQ | Opcode.FSETLT | Opcode.HADD | Opcode.HMUL | Opcode.HADD2 |
             Opcode.HMUL2 | Opcode.CVTF32F16 | Opcode.CVTF16F32 | Opcode.CVTF16X2E4M3X2 | Opcode.CVTF16X2E5M2X2 |
             Opcode.CVTE4M3X2F16X2 | Opcode.CVTE5M2X2F16X2 => InstructionFormat.Rrr
-        case Opcode.FFMA | Opcode.SEL | Opcode.HFMA => InstructionFormat.Rrrr
+        case Opcode.FFMA | Opcode.SEL | Opcode.HFMA | Opcode.LDMATRIX_X4 | Opcode.LDMATRIX_X2_TRANS | Opcode.LDMATRIX_X2 |
+            Opcode.MMA_SYNC_F16_F16_F16_F16 | Opcode.STMATRIX_X2 => InstructionFormat.Rrrr
         case Opcode.MOVI | Opcode.ADDI => InstructionFormat.Rri
         case Opcode.LDG | Opcode.STG | Opcode.LDS | Opcode.STS | Opcode.LDG16 | Opcode.STG16 => InstructionFormat.Mem
         case Opcode.BRA | Opcode.BRZ | Opcode.BRNZ => InstructionFormat.Br

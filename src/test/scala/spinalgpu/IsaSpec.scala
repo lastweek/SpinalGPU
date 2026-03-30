@@ -142,6 +142,24 @@ class IsaSpec extends AnyFunSuite with Matchers {
     Isa.disassemble(cvte5m2x2f16x2) shouldBe "cvte5m2x2f16x2 r26, r27, r0"
   }
 
+  test("encodes, decodes, and disassembles tensor-core opcodes") {
+    val ldmatrixX4 = Isa.encodeRrrr(Opcode.LDMATRIX_X4, rd = 5, rs0 = 6, rs1 = 0, rs2 = 0)
+    val ldmatrixX2Trans = Isa.encodeRrrr(Opcode.LDMATRIX_X2_TRANS, rd = 7, rs0 = 8, rs1 = 0, rs2 = 0)
+    val mma = Isa.encodeRrrr(Opcode.MMA_SYNC_F16_F16_F16_F16, rd = 9, rs0 = 10, rs1 = 11, rs2 = 12)
+    val stmatrix = Isa.encodeRrrr(Opcode.STMATRIX_X2, rd = 0, rs0 = 13, rs1 = 14, rs2 = 0)
+
+    Isa.decodeWord(ldmatrixX4).format shouldBe InstructionFormat.Rrrr
+    Isa.decodeWord(ldmatrixX4).opcode shouldBe Opcode.LDMATRIX_X4
+    Isa.decodeWord(ldmatrixX2Trans).opcode shouldBe Opcode.LDMATRIX_X2_TRANS
+    Isa.decodeWord(mma).opcode shouldBe Opcode.MMA_SYNC_F16_F16_F16_F16
+    Isa.decodeWord(stmatrix).opcode shouldBe Opcode.STMATRIX_X2
+
+    Isa.disassemble(ldmatrixX4) shouldBe "ldmatrix_x4 r5, r6, r0, r0"
+    Isa.disassemble(ldmatrixX2Trans) shouldBe "ldmatrix_x2_trans r7, r8, r0, r0"
+    Isa.disassemble(mma) shouldBe "mma_sync_f16 r9, r10, r11, r12"
+    Isa.disassemble(stmatrix) shouldBe "stmatrix_x2 r0, r13, r14, r0"
+  }
+
   test("machine-code disassembler formats representative instructions") {
     Isa.disassemble(Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)) shouldBe "add r3, r1, r2"
     Isa.disassemble(Isa.encodeRrr(Opcode.FADD, rd = 6, rs0 = 7, rs1 = 8)) shouldBe "fadd r6, r7, r8"

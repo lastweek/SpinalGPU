@@ -281,6 +281,51 @@ object PtxAssembler {
     }
   }
 
+  private final case class TensorLoadMatrixInstruction(opcode: Int, destinationBase: String, addressRegister: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(
+        Isa.encodeRrrr(
+          opcode,
+          rd = layout.requireHalf2Register(destinationBase),
+          rs0 = layout.requireIntegerRegister(addressRegister),
+          rs1 = 0,
+          rs2 = 0
+        )
+      )
+  }
+
+  private final case class TensorStoreMatrixInstruction(addressRegister: String, sourceBase: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(
+        Isa.encodeRrrr(
+          Opcode.STMATRIX_X2,
+          rd = 0,
+          rs0 = layout.requireIntegerRegister(addressRegister),
+          rs1 = layout.requireHalf2Register(sourceBase),
+          rs2 = 0
+        )
+      )
+  }
+
+  private final case class TensorMmaInstruction(destinationBase: String, aBase: String, bBase: String, cBase: String) extends PtxInstruction {
+    override def machineWordCount(layout: RegisterLayout, context: ModuleContext): Int = 1
+
+    override def emit(machinePc: Int, layout: RegisterLayout, context: ModuleContext, labels: Map[String, Int]): Seq[Int] =
+      Seq(
+        Isa.encodeRrrr(
+          Opcode.MMA_SYNC_F16_F16_F16_F16,
+          rd = layout.requireHalf2Register(destinationBase),
+          rs0 = layout.requireHalf2Register(aBase),
+          rs1 = layout.requireHalf2Register(bBase),
+          rs2 = layout.requireHalf2Register(cBase)
+        )
+      )
+  }
+
   private final case class SetPredicateInstruction(
       compareOpcode: Int,
       predicate: String,
@@ -955,6 +1000,36 @@ object PtxAssembler {
       items.map(parseFloatRegisterName)
     }
 
+    def parseTensorHalf2RegisterTuple(token: String, width: Int): Seq[String] = {
+      val trimmed = token.trim
+      require(trimmed.startsWith("{") && trimmed.endsWith("}"), s"expected brace tuple, got: $trimmed")
+      val inner = trimmed.drop(1).dropRight(1).trim
+      require(inner.nonEmpty, s"empty tuple operand: $trimmed")
+      val items = parseTopLevelOperands(inner)
+      require(items.length == width, s"expected tuple width $width, got ${items.length}: $trimmed")
+
+      val tuple = items.map(parseHalf2RegisterName)
+      val indexPattern = """%x(\d+)""".r
+      val indices = tuple.map {
+        case indexPattern(indexText) => indexText.toInt
+        case name => throw new IllegalArgumentException(s"PTX line $lineNumber: tensor tuple only supports canonical %x registers, got: $name")
+      }
+
+      indices.zip(indices.tail).foreach { case (current, next) =>
+        require(next == current + 1, s"tensor tuple registers must be contiguous and ascending: $trimmed")
+      }
+
+      tuple
+    }
+
+    def parseTensorSharedAddress(token: String): String = {
+      val operand = parseMemoryOperand(token)
+      require(operand.symbol.isEmpty, s"tensor shared-memory operands only support address registers, got: $token")
+      require(operand.immediateOffset == 0, s"tensor shared-memory operands do not support immediate offsets, got: $token")
+      val register = operand.baseRegister.getOrElse(throw new IllegalArgumentException(s"tensor shared-memory operands require a base register, got: $token"))
+      parseIntegerRegisterName(register)
+    }
+
     def withAdditionalOffset(operand: MemoryOperand, additionalBytes: Int): MemoryOperand =
       operand.copy(immediateOffset = operand.immediateOffset + additionalBytes)
 
@@ -1009,6 +1084,29 @@ object PtxAssembler {
                 InstructionSequence(destinations.zip(sources).map { case (destination, source) =>
                   MovInstruction(destination, RegisterOperand(source))
                 })
+              case "ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16" =>
+                val Seq(destinationTuple, address) = parseOperands(rest, 2)
+                val destinations = parseTensorHalf2RegisterTuple(destinationTuple, 4)
+                TensorLoadMatrixInstruction(Opcode.LDMATRIX_X4, destinations.head, parseTensorSharedAddress(address))
+              case "ldmatrix.sync.aligned.m8n8.x2.trans.shared::cta.b16" =>
+                val Seq(destinationTuple, address) = parseOperands(rest, 2)
+                val destinations = parseTensorHalf2RegisterTuple(destinationTuple, 2)
+                TensorLoadMatrixInstruction(Opcode.LDMATRIX_X2_TRANS, destinations.head, parseTensorSharedAddress(address))
+              case "ldmatrix.sync.aligned.m8n8.x2.shared::cta.b16" =>
+                val Seq(destinationTuple, address) = parseOperands(rest, 2)
+                val destinations = parseTensorHalf2RegisterTuple(destinationTuple, 2)
+                TensorLoadMatrixInstruction(Opcode.LDMATRIX_X2, destinations.head, parseTensorSharedAddress(address))
+              case "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16" =>
+                val Seq(destinationTuple, aTuple, bTuple, cTuple) = parseOperands(rest, 4)
+                val destinations = parseTensorHalf2RegisterTuple(destinationTuple, 2)
+                val aRegisters = parseTensorHalf2RegisterTuple(aTuple, 4)
+                val bRegisters = parseTensorHalf2RegisterTuple(bTuple, 2)
+                val cRegisters = parseTensorHalf2RegisterTuple(cTuple, 2)
+                TensorMmaInstruction(destinations.head, aRegisters.head, bRegisters.head, cRegisters.head)
+              case "stmatrix.sync.aligned.m8n8.x2.shared::cta.b16" =>
+                val Seq(address, sourceTuple) = parseOperands(rest, 2)
+                val sources = parseTensorHalf2RegisterTuple(sourceTuple, 2)
+                TensorStoreMatrixInstruction(parseTensorSharedAddress(address), sources.head)
               case "add.u32" =>
                 val Seq(destination, lhs, rhs) = parseOperands(rest, 3)
                 BinaryInstruction(Opcode.ADD, Some(Opcode.ADDI), destination, lhs, parseScalarOperand(rhs))

@@ -9,6 +9,7 @@ import spinal.lib.bus.amba4.axi.sim._
 import spinal.lib.bus.amba4.axilite.AxiLite4
 import spinal.lib.bus.amba4.axilite.sim._
 import spinalgpu.toolchain.BuildKernelCorpus
+import spinalgpu.toolchain.BuildTensorKernelCorpus
 import spinalgpu.toolchain.KernelBinaryIO
 import spinalgpu.toolchain.KernelCorpus
 
@@ -26,6 +27,7 @@ object ExecutionTestUtils {
   }
 
   @volatile private var kernelCorpusReady: Boolean = false
+  @volatile private var tensorKernelCorpusReady: Boolean = false
 
   /** Rebuilds generated kernel binaries on demand when a corpus-backed test references a missing `.bin`. */
   def ensureKernelCorpusBuilt(): Unit = synchronized {
@@ -33,6 +35,15 @@ object ExecutionTestUtils {
     if (!kernelCorpusReady || missingBinary) {
       BuildKernelCorpus.buildAll()
       kernelCorpusReady = true
+    }
+  }
+
+  /** Rebuilds only the tensor subset on demand so tensor-focused tests avoid the full corpus path. */
+  def ensureTensorKernelCorpusBuilt(): Unit = synchronized {
+    val missingBinary = KernelCorpus.tensorCases.exists(kernel => !Files.exists(kernel.binaryPath))
+    if (!tensorKernelCorpusReady || missingBinary) {
+      BuildTensorKernelCorpus.buildAll()
+      tensorKernelCorpusReady = true
     }
   }
 
@@ -45,7 +56,11 @@ object ExecutionTestUtils {
   /** Loads a generated machine-code file and auto-builds the corpus first if the requested `.bin` is missing. */
   def loadBinaryFile(memory: AxiMemorySim, baseAddress: Long, path: Path, byteCount: Int): Unit = {
     if (path.normalize.startsWith(KernelCorpus.outputRoot) && (!kernelCorpusReady || !Files.exists(path))) {
-      ensureKernelCorpusBuilt()
+      if (KernelCorpus.tensorCases.exists(_.binaryPath.normalize() == path.normalize())) {
+        ensureTensorKernelCorpusBuilt()
+      } else {
+        ensureKernelCorpusBuilt()
+      }
     }
     loadBinary(memory, baseAddress, KernelBinaryIO.readWords(path), byteCount)
   }

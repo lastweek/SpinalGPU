@@ -5,6 +5,7 @@ import spinalgpu.FaultCode
 import spinalgpu.GpuClusterConfig
 import spinalgpu.GpuConfig
 import spinalgpu.LowPrecisionCodec
+import spinalgpu.TensorCoreLayouts
 
 /** Single source of truth for the PTX teaching corpus.
   *
@@ -40,6 +41,10 @@ object KernelCorpus {
 
     case object SpecialRegisters extends KernelFeature {
       override val id: String = "special_registers"
+    }
+
+    case object TensorCore extends KernelFeature {
+      override val id: String = "tensor_core"
     }
   }
 
@@ -376,6 +381,80 @@ object KernelCorpus {
     val encoded = LowPrecisionCodec.floatToE5m2BitsSatFinite(value)
     halfFloat(halfBits(LowPrecisionCodec.e5m2BitsToFloat(encoded)))
   }
+
+  private def tensorSetHalf(word: Int, halfIndex: Int, value: Int): Int =
+    if (halfIndex == 0) (word & 0xFFFF0000) | (value & 0xFFFF)
+    else (word & 0x0000FFFF) | ((value & 0xFFFF) << 16)
+
+  private def tensorPackRowMajorTile(tile: Array[Array[Int]]): Seq[Int] = {
+    val words = Array.fill(TensorCoreLayouts.TileRows * 4)(0)
+    for (row <- 0 until TensorCoreLayouts.TileRows) {
+      for (col <- 0 until TensorCoreLayouts.TileCols) {
+        val lane = TensorCoreLayouts.rowMajorLane(row, col)
+        val half = TensorCoreLayouts.rowMajorHalf(col)
+        words(lane) = tensorSetHalf(words(lane), half, tile(row)(col))
+      }
+    }
+    words.toSeq
+  }
+
+  private def tensorPackATiles(matrix: Array[Array[Int]]): Seq[Int] =
+    (0 until 4).flatMap { bank =>
+      val rowBase = if ((bank & 0x1) != 0) 8 else 0
+      val colBase = if (bank >= 2) 8 else 0
+      tensorPackRowMajorTile(Array.tabulate(TensorCoreLayouts.TileRows, TensorCoreLayouts.TileCols) { (row, col) =>
+        matrix(rowBase + row)(colBase + col)
+      })
+    }
+
+  private def tensorPackVerticalTiles(matrix: Array[Array[Int]]): Seq[Int] =
+    (0 until 2).flatMap { bank =>
+      val rowBase = bank * 8
+      tensorPackRowMajorTile(Array.tabulate(TensorCoreLayouts.TileRows, TensorCoreLayouts.TileCols) { (row, col) =>
+        matrix(rowBase + row)(col)
+      })
+    }
+
+  private def halfFmaBits(lhs: Int, rhs: Int, acc: Int): Int =
+    halfBits((halfFloat(lhs) * halfFloat(rhs)) + halfFloat(acc))
+
+  private val tensorRoundtripInputWords: Seq[Int] =
+    (0 until 2).flatMap { bank =>
+      tensorPackRowMajorTile(Array.tabulate(TensorCoreLayouts.TileRows, TensorCoreLayouts.TileCols) { (row, col) =>
+        ((bank << 12) | (row << 6) | (col << 1) | 1) & 0xFFFF
+      })
+    }
+
+  private val tensorMmaInputA: Array[Array[Int]] =
+    Array.tabulate(TensorCoreLayouts.M, TensorCoreLayouts.K) { (row, col) =>
+      halfBits(((row % 4) + (col % 3) + 1).toFloat * 0.25f)
+    }
+
+  private val tensorMmaInputB: Array[Array[Int]] =
+    Array.tabulate(TensorCoreLayouts.K, TensorCoreLayouts.N) { (row, col) =>
+      halfBits(((row % 5) - (col % 2) + 2).toFloat * 0.125f)
+    }
+
+  private val tensorMmaInputC: Array[Array[Int]] =
+    Array.tabulate(TensorCoreLayouts.M, TensorCoreLayouts.N) { (row, col) =>
+      halfBits(((row - col).toFloat) * 0.0625f)
+    }
+
+  private val tensorMmaExpectedD: Array[Array[Int]] =
+    Array.tabulate(TensorCoreLayouts.M, TensorCoreLayouts.N) { (row, col) =>
+      var accBits = tensorMmaInputC(row)(col)
+      var k = 0
+      while (k < TensorCoreLayouts.K) {
+        accBits = halfFmaBits(tensorMmaInputA(row)(k), tensorMmaInputB(k)(col), accBits)
+        k += 1
+      }
+      accBits
+    }
+
+  private val tensorMmaInputAWords: Seq[Int] = tensorPackATiles(tensorMmaInputA)
+  private val tensorMmaInputBWords: Seq[Int] = tensorPackVerticalTiles(tensorMmaInputB)
+  private val tensorMmaInputCWords: Seq[Int] = tensorPackVerticalTiles(tensorMmaInputC)
+  private val tensorMmaExpectedDWords: Seq[Int] = tensorPackVerticalTiles(tensorMmaExpectedD)
 
   private val scalarAddF16InputA: Seq[Int] =
     Seq(-1.0f, 0.5f, 1.5f, -2.25f, 3.0f, 4.5f, -5.5f, 6.0f).map(halfBits)
@@ -898,6 +977,42 @@ object KernelCorpus {
     harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
   )
 
+  val tensorLdmatrixStmatrixRoundtripF16: KernelCase = KernelCase(
+    name = "tensor_ldmatrix_stmatrix_roundtrip_f16",
+    relativeSourcePath = "tensor/tensor_ldmatrix_stmatrix_roundtrip_f16.ptx",
+    purpose = "Round-trip two packed FP16 tensor tiles through ldmatrix.x2 and stmatrix.x2.",
+    primaryFeature = TensorCore,
+    secondaryFeatures = Seq(SharedMemory, GlobalMemory, SpecialRegisters),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 32, argBase = 0x780, sharedBytes = 512),
+    timeoutCycles = 120000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0x9800, values = tensorRoundtripInputWords.map(word32)),
+      WriteArgBuffer(base = 0x780, values = Seq(0x9800L, 0x9C00L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0x9C00, values = tensorRoundtripInputWords.map(word32)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
+  val tensorMmaF16F16F16: KernelCase = KernelCase(
+    name = "tensor_mma_f16_f16_f16",
+    relativeSourcePath = "tensor/tensor_mma_f16_f16_f16.ptx",
+    purpose = "Execute one m16n8k16 FP16 tensor MMA tile using ldmatrix + mma + stmatrix.",
+    primaryFeature = TensorCore,
+    secondaryFeatures = Seq(SharedMemory, GlobalMemory, SpecialRegisters, FloatingPoint),
+    teachingLevel = Core,
+    command = KernelCommand(entryPc = 0x100, blockDimX = 32, argBase = 0x7A0, sharedBytes = 1280),
+    timeoutCycles = 160000,
+    preloadOps = Seq(
+      WriteDataWords(base = 0xA000, values = tensorMmaInputAWords.map(word32)),
+      WriteDataWords(base = 0xA400, values = tensorMmaInputBWords.map(word32)),
+      WriteDataWords(base = 0xA800, values = tensorMmaInputCWords.map(word32)),
+      WriteArgBuffer(base = 0x7A0, values = Seq(0xA000L, 0xA400L, 0xA800L, 0xAC00L))
+    ),
+    expectation = Success(checks = Seq(ExpectWords(base = 0xAC00, values = tensorMmaExpectedDWords.map(word32)))),
+    harnessTargets = Seq(GpuTop, StreamingMultiprocessor)
+  )
+
   val scalarConvertE4m3x2F16x2: KernelCase = KernelCase(
     name = "scalar_convert_e4m3x2_f16x2",
     relativeSourcePath = "arithmetic/scalar_convert_e4m3x2_f16x2.ptx",
@@ -1243,6 +1358,8 @@ object KernelCorpus {
     vectorAddF16x2,
     matrixAddF16,
     matrixMulF16AccumF32,
+    tensorLdmatrixStmatrixRoundtripF16,
+    tensorMmaF16F16F16,
     scalarConvertE4m3x2F16x2,
     scalarConvertE5m2x2F16x2,
     vectorAddE4m3x2,
@@ -1273,6 +1390,8 @@ object KernelCorpus {
     matrixMulF32,
     matrixAddF16,
     matrixMulF16AccumF32,
+    tensorLdmatrixStmatrixRoundtripF16,
+    tensorMmaF16F16F16,
     vectorAddE4m3x2,
     matrixMulE5m2x2AccumF32
   )
@@ -1282,6 +1401,10 @@ object KernelCorpus {
     vectorAddMultiBlock,
     matrixAddMultiBlockF32,
     trapBlockOne
+  )
+  val tensorCases: Seq[KernelCase] = Seq(
+    tensorLdmatrixStmatrixRoundtripF16,
+    tensorMmaF16F16F16
   )
   val streamingMultiprocessorCases: Seq[KernelCase] =
     all.filter(_.harnessTargets.contains(HarnessTarget.StreamingMultiprocessor))

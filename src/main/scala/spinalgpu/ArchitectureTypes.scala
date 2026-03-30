@@ -225,13 +225,19 @@ case class TensorReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val opcode = Bits(8 bits)
   val activeMask = Bits(config.warpSize bits)
-  val operandA = Vec(UInt(config.dataWidth bits), config.warpSize)
-  val operandB = Vec(UInt(config.dataWidth bits), config.warpSize)
+  val rdBase = UInt(config.registerAddressWidth bits)
+  val rs0Base = UInt(config.registerAddressWidth bits)
+  val rs1Base = UInt(config.registerAddressWidth bits)
+  val rs2Base = UInt(config.registerAddressWidth bits)
 }
 
 case class TensorRsp(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val completed = Bool()
+  val writeEnable = Bool()
+  val writeOffset = UInt(2 bits)
+  val error = Bool()
+  val faultCode = UInt(config.faultCodeWidth bits)
   val result = Vec(Bits(config.dataWidth bits), config.warpSize)
 }
 

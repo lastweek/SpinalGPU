@@ -77,8 +77,13 @@ Immediate and branch offsets are signed 14-bit values.
 | `0x38` | `cvtf16x2e5m2x2` | Convert packed `e5m2x2` carrier to packed FP16x2 |
 | `0x39` | `cvte4m3x2f16x2` | Convert packed FP16x2 to packed `e4m3x2` carrier with satfinite narrowing |
 | `0x3A` | `cvte5m2x2f16x2` | Convert packed FP16x2 to packed `e5m2x2` carrier with satfinite narrowing |
+| `0x50` | `ldmatrix_x4` | Tensor shared-memory load for four row-major `m8n8` FP16 tiles |
+| `0x51` | `ldmatrix_x2_trans` | Tensor shared-memory load for two transposed `m8n8` FP16 tiles |
+| `0x52` | `ldmatrix_x2` | Tensor shared-memory load for two row-major `m8n8` FP16 tiles |
+| `0x53` | `mma_sync_f16` | Warp-level `m16n8k16` FP16 tensor multiply-accumulate |
+| `0x54` | `stmatrix_x2` | Tensor shared-memory store for two row-major `m8n8` FP16 tiles |
 
-Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and tensor-machine instructions.
+Opcode range `0x40..0x4F` remains reserved for future SFU-machine instructions. Opcode range `0x55..0x5F` remains reserved for future tensor-machine instructions.
 
 ## Register Model
 
@@ -116,11 +121,15 @@ Opcode ranges `0x40..0x4F` and `0x50..0x5F` remain reserved for future SFU and t
 ## Execution Notes
 
 - `fadd`, `fmul`, `ffma`, `fsub`, `fabs`, `fneg`, `fseteq`, `fsetlt`, `hadd`, `hmul`, `hfma`, `hadd2`, `hmul2`, the low-precision conversion opcodes, and `sel` execute on the CUDA-core datapath.
-- `ffma`, `hfma`, and `sel` are the current users of the `RRRR` format.
+- `ffma`, `hfma`, `sel`, and the tensor opcodes are the current users of the `RRRR` format.
 - PTX `fma.rn.f32` lowers to machine `ffma`, but the current repo implementation computes it as FP32 multiply followed by FP32 add rather than a single-round fused IEEE FMA.
 - PTX `fma.rn.f16` lowers to machine `hfma` on the same three-source issue path, using the low 16 bits of each operand/result slot.
 - PTX `mov.v2/v4.f32`, `ld.global.v2/v4.f32`, and `st.global.v2/v4.f32` are frontend tuple spellings only. They lower into repeated scalar `mov`, `ldg`, and `stg` machine instructions, so no dedicated vector opcode exists.
 - `ldg` and `stg` are typeless 32-bit machine-memory ops. PTX `.u32`, `.f32`, `.f16x2`, and the narrow lowered `%gridid` `.u64` path all reuse them.
 - `ldg16` and `stg16` are typeless 16-bit machine-memory ops. PTX `.f16` and packed `.b16` FP8 carrier traffic reuse them.
+- The tensor v1 surface is warp-synchronous only and accepts exactly five PTX spellings: `ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.trans.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.shared::cta.b16`, `mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16`, and `stmatrix.sync.aligned.m8n8.x2.shared::cta.b16`.
+- Tensor ops use `RRRR` base-register encoding rather than scalar lanes: `rd` is the destination tuple base for `ldmatrix` and `mma`, `rs0` is the shared row-address base for `ldmatrix` and `stmatrix`, `rs1` is the B/base-source tuple for `mma` or the source tuple for `stmatrix`, and `rs2` is the C tuple for `mma`.
+- Tensor execution is serialized per sub-SM in v1. The tensor block reuses the existing 3-read/1-write warp register file and single-word shared-memory port through internal operand collection, serialized shared-memory sequencing, and multi-beat writeback.
+- Tensor ops require a full participating warp. Protocol mismatches fault with `tensor_protocol`; bad tensor shared-memory row alignment faults with `misaligned_load_store`.
 - Instruction fetch remains single-word. Global LSU traffic is burst-capable and coalesces contiguous active-lane 32-bit accesses into multi-beat requests up to `cudaLaneCount` beats.
 - Global LSU traffic now supports both 16-bit and 32-bit accesses. Shared memory remains word-addressed in the current public PTX surface.

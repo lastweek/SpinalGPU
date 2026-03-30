@@ -464,6 +464,35 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
     )
   }
 
+  test("lowers the minimal tensor-core PTX surface into single tensor opcodes") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry tensor_ops()
+        |{
+        |    .reg .u32 %r<3>;
+        |    .reg .f16x2 %x<8>;
+        |
+        |    ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16 {%x0, %x1, %x2, %x3}, [%r0];
+        |    ldmatrix.sync.aligned.m8n8.x2.trans.shared::cta.b16 {%x4, %x5}, [%r1];
+        |    mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 {%x6, %x7}, {%x0, %x1, %x2, %x3}, {%x4, %x5}, {%x6, %x7};
+        |    stmatrix.sync.aligned.m8n8.x2.shared::cta.b16 [%r2], {%x6, %x7};
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeRrrr(Opcode.LDMATRIX_X4, rd = 4, rs0 = 1, rs1 = 0, rs2 = 0),
+      Isa.encodeRrrr(Opcode.LDMATRIX_X2_TRANS, rd = 8, rs0 = 2, rs1 = 0, rs2 = 0),
+      Isa.encodeRrrr(Opcode.MMA_SYNC_F16_F16_F16_F16, rd = 10, rs0 = 4, rs1 = 8, rs2 = 10),
+      Isa.encodeRrrr(Opcode.STMATRIX_X2, rd = 0, rs0 = 3, rs1 = 10, rs2 = 0),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
   test("rejects unsupported PTX constructs") {
     an[IllegalArgumentException] shouldBe thrownBy {
       PtxAssembler.assemble(
@@ -491,6 +520,61 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
           |    .reg .f32 %f<4>;
           |
           |    mov.v2.f32 {%f0}, {%f1, %f2};
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u32 %r<1>;
+          |    .reg .f16x2 %x<5>;
+          |
+          |    ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16 {%x0, %x2, %x3, %x4}, [%r0];
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u32 %r<2>;
+          |    .reg .f16 %h<2>;
+          |    .reg .f16x2 %x<4>;
+          |
+          |    mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 {%x0, %x1}, {%x0, %x1, %x2, %x3}, {%h0, %h1}, {%x0, %x1};
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .u32 %r<1>;
+          |    .reg .f16x2 %x<2>;
+          |
+          |    stmatrix.sync.aligned.m8n8.x2.shared::cta.b16 [%r0 + 16], {%x0, %x1};
           |    ret;
           |}
           |""".stripMargin

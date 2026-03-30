@@ -36,6 +36,7 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `PA10` | `PtxAssemblerSpec`: lowers `min/max` convenience ops and `mad.lo.u32` |
 | `PA11` | `PtxAssemblerSpec`: lowers `.v2/.v4 .f32` tuple `mov/ld/st.global` and rejects malformed vector tuples |
 | `PA12` | `PtxAssemblerSpec`: allocates `%h/%x/%b` from the shared physical pool and lowers the supported FP16 and FP8 conversion subset |
+| `PA13` | `PtxAssemblerSpec`: lowers the minimal tensor PTX surface and rejects malformed tensor tuples/operands |
 | `KM1` | `KernelCorpusSpec`: kernel corpus references every `.ptx` file exactly once and generated binaries exist |
 | `KM2` | `KernelCorpusSpec`: kernel corpus metadata is complete and expectation types match teaching levels |
 | `KM3` | `KernelCorpusSpec`: PTX headers match declarative metadata and follow the teaching template |
@@ -80,6 +81,7 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `SM32` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_add_e5m2x2` completes and writes expected packed E5M2x2 results |
 | `SM33` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_mul_e4m3x2_accum_f32` completes and writes expected FP32 matrix products from packed E4M3x2 inputs |
 | `SM34` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_mul_e5m2x2_accum_f32` completes and writes expected FP32 matrix products from packed E5M2x2 inputs |
+| `SM35` | `StreamingMultiprocessorTensorSpec`: the tensor-only `ldmatrix/stmatrix` round-trip and FP16 MMA kernels complete through the SM harness |
 | `GT1` | `GpuTopSimSpec`: `GpuTop` exposes idle AXI memory and AXI-Lite control boundaries |
 | `GT2` | `ExecutionFrontendSimSpec`: `grid_id_store` increments across successive `GpuTop` launches |
 | `GT3` | `ExecutionFrontendSimSpec`: `matrix_add_f32` executes through `GpuTop` and writes expected FP32 output |
@@ -96,6 +98,8 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `GT14` | `MultiSmGpuTopSpec`: `smid_store` executes through `GpuTop` and writes real `%smid/%nsmid` values across multiple SMs |
 | `GT15` | `MultiSmGpuTopSpec`: `trap_block_one` executes through `GpuTop` and stops later CTA dispatch after the first CTA trap |
 | `GT16` | `MultiSmGpuTopSpec`: `matrix_add_multi_block_f32` executes through `GpuTop` across a real 2D CTA grid |
+| `GT17` | `GpuTopTensorSpec`: the tensor-only `ldmatrix/stmatrix` round-trip and FP16 MMA kernels complete through `GpuTop` |
+| `TC1` | `TensorCoreBlockSpec`: exact `ldmatrix`, `mma`, `stmatrix`, and tensor fault behavior for the FP16 tensor v1 slice |
 | `GD1` | `GridDispatchControllerSpec`: dispatcher walks CTA coordinates in `x -> y -> z` order |
 | `GD2` | `GridDispatchControllerSpec`: dispatcher round-robins CTAs across SMs and backfills idle SMs |
 | `GD3` | `GridDispatchControllerSpec`: first SM fault stops further CTA dispatch and reports one kernel-global fault |
@@ -108,9 +112,9 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | Module and entry contract | `Partial` | `Direct` | One `.visible .entry` per file, `.param .u32` only |
 | Types, registers, and predicates | `Partial` | `Direct` | `.u32`, `.f32`, `.f16`, `.f16x2`, and `.b16` share one physical 32-bit register pool; PTX vector tuples reuse `%f` registers; `%gridid` remains the only narrow public `.u64` path |
 | Special registers | `Partial` | `Direct` | `tid/ntid/ctaid/nctaid.{x,y,z}` plus core SIMT/SM builtins are covered directly; `%gridid` remains a narrow `.u64` path |
-| Instruction surface | `Partial` | `Direct` | Integer, control, FP32 CUDA-core ops, FP16 scalar/packed ops, packed FP8 conversion ops, PTX vector `.v2/.v4 .f32` tuple movement, and narrow `.u64` data movement are implemented for the documented subset |
-| Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only; aligned 16-bit and 32-bit global accesses, FP16/FP32 global traffic, packed FP8 carriers in `.b16`, coalesced bursts, PTX vector tuple loads/stores lowered element-wise, plus lowered `st.global.u64` |
-| Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, BF16, broad `cvt.*`, shared-memory low-precision PTX, SFU, tensor, sync, atomics, calls, and broad compiler-generated PTX remain out of scope |
+| Instruction surface | `Partial` | `Direct` | Integer, control, FP32 CUDA-core ops, FP16 scalar/packed ops, packed FP8 conversion ops, the narrow FP16 tensor v1 surface, PTX vector `.v2/.v4 .f32` tuple movement, and narrow `.u64` data movement are implemented for the documented subset |
+| Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only; aligned 16-bit and 32-bit global accesses, FP16/FP32 global traffic, packed FP8 carriers in `.b16`, coalesced bursts, PTX vector tuple loads/stores lowered element-wise, lowered `st.global.u64`, and the documented tensor shared-memory row-address protocol |
+| Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, BF16, broad `cvt.*`, SFU, sync, atomics, calls, and broad compiler-generated PTX remain out of scope; tensor support is still limited to the narrow FP16 v1 slice below |
 
 ## Matrix V1 Note
 
@@ -120,7 +124,7 @@ Current matrix support in SpinalGPU should be read as **matrix v1**:
 - untiled row-major kernels
 - inputs and outputs in global memory
 - scalar CUDA-core FP32 execution under the hood
-- no shared-memory tiling, tensor instructions, or matrix-specific multi-CTA tiling/decomposition yet
+- no general matrix tiling library, tensor scheduling overlap, or matrix-specific multi-CTA tiling/decomposition yet
 
 The current teaching ladder for that matrix v1 path is `matrix_copy_f32`, `matrix_transpose_f32`, `matrix_add_f32`, and `matrix_mul_f32`.
 
@@ -247,7 +251,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | `.local` state space | PTX defines per-thread local memory and spill-like addressing | `Rejected` | `None` | none | No `.local` declarations, addressing, or lowering path exists. |
 | Floating-point families beyond the current FP32/FP16/packed-FP8 subset | PTX supports broader FP ALU, conversions, rounding modes, unordered compares, richer literal forms, and native packed/vector arithmetic | `Rejected` | `Direct` | `PA4`, `PA12` | Today the accepted floating-point surface is the FP32 subset, FP16 scalar/packed arithmetic, scalar `f16 <-> f32` conversion, packed `e4m3x2/e5m2x2 <-> f16x2` conversion, `ld/st.global.f16`, `ld/st.global.f16x2`, and `ld/st.global.b16`. BF16, `.f64`, unordered FP compares, low-precision shared-memory PTX, and native packed vector ALU beyond `f16x2` remain unsupported. |
 | SFU instructions | PTX includes special-function instructions such as reciprocal and transcendental ops | `Rejected` | `None` | none | No PTX SFU mnemonics are accepted yet. |
-| Tensor and MMA instructions | PTX includes tensor fragment, MMA, and tensor-memory instructions | `Rejected` | `None` | none | No PTX tensor surface is exposed yet. |
+| Tensor and MMA instructions beyond the narrow FP16 tensor v1 slice | PTX includes broad tensor fragment, MMA, sparse, and tensor-memory instruction families | `Rejected` | `Direct` | `PA13`, `TC1`, `SM35`, `GT17` | The public tensor surface currently accepts only `ldmatrix.sync.aligned.m8n8.x4.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.trans.shared::cta.b16`, `ldmatrix.sync.aligned.m8n8.x2.shared::cta.b16`, `mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16`, and `stmatrix.sync.aligned.m8n8.x2.shared::cta.b16`. |
 | Barriers and synchronization | PTX includes CTA sync, async copy coordination, and barrier objects | `Rejected` | `None` | none | No PTX-visible barrier or synchronization instructions exist in the current frontend/runtime path. |
 | Atomics and reductions | PTX includes atomic and reduction memory operations | `Rejected` | `None` | none | No atomic lowering or memory-ordering support exists. |
 | Function calls and device functions | PTX modules may define functions and issue `call` instructions | `Rejected` | `Direct` | `PA4` | `call` is explicitly rejected. `ret` works only as kernel exit. |

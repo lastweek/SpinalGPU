@@ -383,10 +383,11 @@ class SubSmPartition(config: SmConfig) extends Component {
     readAddrC := decodeUnit.io.decoded.rs2
   }
 
+  private val tensorOwnsRegisterReads = engineState === EngineState.WAIT_TENSOR
   registerFile.io.readSlotId := selectedLocalSlotReg
-  registerFile.io.readAddrA := readAddrA
-  registerFile.io.readAddrB := readAddrB
-  registerFile.io.readAddrC := readAddrC
+  registerFile.io.readAddrA := Mux(tensorOwnsRegisterReads, tensorCoreBlock.io.readAddrA, readAddrA)
+  registerFile.io.readAddrB := Mux(tensorOwnsRegisterReads, tensorCoreBlock.io.readAddrB, readAddrB)
+  registerFile.io.readAddrC := Mux(tensorOwnsRegisterReads, tensorCoreBlock.io.readAddrC, readAddrC)
 
   specialRegisterUnit.io.decoded := decodeUnit.io.decoded
   specialRegisterUnit.io.selectedWarpId := selectedWarpIdReg
@@ -438,8 +439,6 @@ class SubSmPartition(config: SmConfig) extends Component {
     loadStoreUnit.io.issue.payload.addresses(lane) := (registerFile.io.readDataA(lane) + immediateUInt.resized).resized
     loadStoreUnit.io.issue.payload.writeData(lane) := registerFile.io.readDataB(lane).asBits
   }
-  loadStoreUnit.io.sharedMemReq <> io.sharedMemReq
-  loadStoreUnit.io.sharedMemRsp <> io.sharedMemRsp
   loadStoreUnit.io.externalMemReq <> io.externalMemReq
   loadStoreUnit.io.externalMemRsp <> io.externalMemRsp
   loadStoreUnit.io.response.ready := engineState === EngineState.WAIT_LSU
@@ -457,11 +456,43 @@ class SubSmPartition(config: SmConfig) extends Component {
   tensorCoreBlock.io.issue.payload.warpId := selectedWarpIdReg
   tensorCoreBlock.io.issue.payload.opcode := decodeUnit.io.decoded.opcode
   tensorCoreBlock.io.issue.payload.activeMask := selectedContextReg.activeMask
-  for (lane <- 0 until config.warpSize) {
-    tensorCoreBlock.io.issue.payload.operandA(lane) := registerFile.io.readDataA(lane)
-    tensorCoreBlock.io.issue.payload.operandB(lane) := registerFile.io.readDataB(lane)
-  }
+  tensorCoreBlock.io.issue.payload.rdBase := decodeUnit.io.decoded.rd
+  tensorCoreBlock.io.issue.payload.rs0Base := decodeUnit.io.decoded.rs0
+  tensorCoreBlock.io.issue.payload.rs1Base := decodeUnit.io.decoded.rs1
+  tensorCoreBlock.io.issue.payload.rs2Base := decodeUnit.io.decoded.rs2
+  tensorCoreBlock.io.readDataA := registerFile.io.readDataA
+  tensorCoreBlock.io.readDataB := registerFile.io.readDataB
+  tensorCoreBlock.io.readDataC := registerFile.io.readDataC
   tensorCoreBlock.io.response.ready := engineState === EngineState.WAIT_TENSOR
+
+  private val tensorOwnsSharedMemory = engineState === EngineState.WAIT_TENSOR
+  io.sharedMemReq.valid := False
+  io.sharedMemReq.payload.warpId := U(0, config.warpIdWidth bits)
+  io.sharedMemReq.payload.write := False
+  io.sharedMemReq.payload.address := U(0, config.sharedAddressWidth bits)
+  io.sharedMemReq.payload.writeData := B(0, config.dataWidth bits)
+  io.sharedMemReq.payload.byteMask := B(0, config.byteMaskWidth bits)
+
+  loadStoreUnit.io.sharedMemReq.ready := False
+  loadStoreUnit.io.sharedMemRsp.valid := False
+  loadStoreUnit.io.sharedMemRsp.payload := io.sharedMemRsp.payload
+
+  tensorCoreBlock.io.sharedMemReq.ready := False
+  tensorCoreBlock.io.sharedMemRsp.valid := False
+  tensorCoreBlock.io.sharedMemRsp.payload := io.sharedMemRsp.payload
+
+  when(tensorOwnsSharedMemory) {
+    io.sharedMemReq.valid := tensorCoreBlock.io.sharedMemReq.valid
+    io.sharedMemReq.payload := tensorCoreBlock.io.sharedMemReq.payload
+    tensorCoreBlock.io.sharedMemReq.ready := io.sharedMemReq.ready
+    tensorCoreBlock.io.sharedMemRsp.valid := io.sharedMemRsp.valid
+  } otherwise {
+    io.sharedMemReq.valid := loadStoreUnit.io.sharedMemReq.valid
+    io.sharedMemReq.payload := loadStoreUnit.io.sharedMemReq.payload
+    loadStoreUnit.io.sharedMemReq.ready := io.sharedMemReq.ready
+    loadStoreUnit.io.sharedMemRsp.valid := io.sharedMemRsp.valid
+  }
+  io.sharedMemRsp.ready := Mux(tensorOwnsSharedMemory, tensorCoreBlock.io.sharedMemRsp.ready, loadStoreUnit.io.sharedMemRsp.ready)
 
   when(engineState === EngineState.ISSUE) {
     when(decodeUnit.io.decoded.illegal) {
@@ -692,25 +723,42 @@ class SubSmPartition(config: SmConfig) extends Component {
     }
 
     when(tensorCoreBlock.io.response.fire) {
+      val tensorWriteRd = (pendingOp.rd + tensorCoreBlock.io.response.payload.writeOffset.resize(config.registerAddressWidth)).resized
       emitWriteback(
         slotId = pendingOp.localSlotId,
         warpId = pendingOp.warpId,
-        rd = pendingOp.rd,
+        rd = tensorWriteRd,
         writeMask = pendingOp.activeMask,
         data = tensorCoreBlock.io.response.payload.result,
-        enable = pendingOp.valid && pendingOp.writesRd
+        enable = pendingOp.valid && tensorCoreBlock.io.response.payload.writeEnable
       )
-      emitContextUpdate(
-        index = pendingOp.warpId,
-        source = selectedContextReg,
-        pc = pendingOp.nextPc,
-        runnable = True,
-        outstanding = False,
-        exited = selectedContextReg.exited,
-        faulted = selectedContextReg.faulted
-      )
-      clearPendingOp()
-      engineState := EngineState.IDLE
+
+      when(tensorCoreBlock.io.response.payload.error) {
+        emitContextUpdate(
+          index = pendingOp.warpId,
+          source = selectedContextReg,
+          pc = pendingOp.pc,
+          runnable = False,
+          outstanding = False,
+          exited = selectedContextReg.exited,
+          faulted = True
+        )
+        emitTrap(pendingOp.warpId, pendingOp.pc, tensorCoreBlock.io.response.payload.faultCode)
+        clearPendingOp()
+        engineState := EngineState.IDLE
+      } elsewhen (tensorCoreBlock.io.response.payload.completed) {
+        emitContextUpdate(
+          index = pendingOp.warpId,
+          source = selectedContextReg,
+          pc = pendingOp.nextPc,
+          runnable = True,
+          outstanding = False,
+          exited = selectedContextReg.exited,
+          faulted = selectedContextReg.faulted
+        )
+        clearPendingOp()
+        engineState := EngineState.IDLE
+      }
     }
   }
 }
