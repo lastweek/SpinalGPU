@@ -83,6 +83,7 @@ Use the small wrappers in `scripts/` for the common inner loop:
   - `kernels/control/`
   - `kernels/global_memory/`
   - `kernels/shared_memory/`
+  - `kernels/sfu/`
   - `kernels/special_registers/`
 - `kernels/cuda/` is intentionally separate from the executable PTX corpus:
   - `.cu` files are not compiled by `sbt refreshKernels`

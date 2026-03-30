@@ -1,4 +1,4 @@
-// Purpose: Trigger the tcgen05 load-class hazard by issuing a second tcgen05.ld before waiting on the first.
+// Purpose: Fault when a second tcgen05.ld is issued before tcgen05.wait::ld drains the pending load class.
 // Primary feature: tensor_core
 // Expected outcome: fault
 //
@@ -49,10 +49,11 @@
     tcgen05.st.sync.aligned.32x32b.x2.b32 [%r5], {%r8, %r9};
     tcgen05.wait::st.sync.aligned;
 
-// Fault trigger
-    tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r8, %r9}, [%r5];
+// Core
     tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r8, %r9}, [%r5];
 
-// Exit
+// Fault trigger
+    tcgen05.ld.sync.aligned.32x32b.x2.b32 {%r8, %r9}, [%r5];
+
     ret;
 }

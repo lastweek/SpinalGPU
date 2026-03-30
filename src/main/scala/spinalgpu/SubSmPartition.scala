@@ -478,7 +478,7 @@ class SubSmPartition(config: SmConfig) extends Component {
   specialFunctionUnit.io.issue.payload.opcode := decodeUnit.io.decoded.opcode
   specialFunctionUnit.io.issue.payload.activeMask := selectedContextReg.activeMask
   for (lane <- 0 until config.warpSize) {
-    specialFunctionUnit.io.issue.payload.operand(lane) := registerFile.io.readDataA(lane)
+    specialFunctionUnit.io.issue.payload.operand(lane) := registerFile.io.readDataA(lane).asBits
   }
   specialFunctionUnit.io.response.ready := engineState === EngineState.WAIT_SFU && !tcgen05Block.io.event.valid
 

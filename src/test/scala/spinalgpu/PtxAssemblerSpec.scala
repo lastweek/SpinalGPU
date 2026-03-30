@@ -493,6 +493,52 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
     )
   }
 
+  test("lowers the supported unary SFU PTX surface into dedicated machine opcodes") {
+    val program = PtxAssembler.assemble(
+      """.version 8.0
+        |.target spinalgpu
+        |.address_size 32
+        |
+        |.visible .entry sfu_ops()
+        |{
+        |    .reg .f32 %f<8>;
+        |    .reg .f16 %h<3>;
+        |    .reg .f16x2 %x<3>;
+        |
+        |    rcp.approx.f32 %f1, %f0;
+        |    sqrt.approx.f32 %f2, %f1;
+        |    rsqrt.approx.f32 %f3, %f2;
+        |    sin.approx.f32 %f4, %f3;
+        |    cos.approx.f32 %f5, %f4;
+        |    lg2.approx.f32 %f6, %f5;
+        |    ex2.approx.f32 %f7, %f6;
+        |    tanh.approx.f32 %f0, %f7;
+        |    ex2.approx.f16 %h1, %h0;
+        |    tanh.approx.f16 %h2, %h1;
+        |    ex2.approx.f16x2 %x1, %x0;
+        |    tanh.approx.f16x2 %x2, %x1;
+        |    ret;
+        |}
+        |""".stripMargin
+    )
+
+    program.words shouldBe Seq(
+      Isa.encodeRrr(Opcode.FRCP, rd = 2, rs0 = 1, rs1 = 0),
+      Isa.encodeRrr(Opcode.FSQRT, rd = 3, rs0 = 2, rs1 = 0),
+      Isa.encodeRrr(Opcode.FRSQRT, rd = 4, rs0 = 3, rs1 = 0),
+      Isa.encodeRrr(Opcode.FSIN, rd = 5, rs0 = 4, rs1 = 0),
+      Isa.encodeRrr(Opcode.FCOS, rd = 6, rs0 = 5, rs1 = 0),
+      Isa.encodeRrr(Opcode.FLG2, rd = 7, rs0 = 6, rs1 = 0),
+      Isa.encodeRrr(Opcode.FEX2, rd = 8, rs0 = 7, rs1 = 0),
+      Isa.encodeRrr(Opcode.FTANH, rd = 1, rs0 = 8, rs1 = 0),
+      Isa.encodeRrr(Opcode.HEX2, rd = 10, rs0 = 9, rs1 = 0),
+      Isa.encodeRrr(Opcode.HTANH, rd = 11, rs0 = 10, rs1 = 0),
+      Isa.encodeRrr(Opcode.HEX2X2, rd = 13, rs0 = 12, rs1 = 0),
+      Isa.encodeRrr(Opcode.HTANHX2, rd = 14, rs0 = 13, rs1 = 0),
+      Isa.encodeBr(Opcode.EXIT, rs0 = 0, offset = 0)
+    )
+  }
+
   test("rejects unsupported PTX constructs") {
     an[IllegalArgumentException] shouldBe thrownBy {
       PtxAssembler.assemble(
@@ -520,6 +566,74 @@ class PtxAssemblerSpec extends AnyFunSuite with Matchers {
           |    .reg .f32 %f<4>;
           |
           |    mov.v2.f32 {%f0}, {%f1, %f2};
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f32 %f<1>;
+          |
+          |    rcp.approx.ftz.f32 %f0, %f0;
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f32 %f<1>;
+          |
+          |    sqrt.rn.f32 %f0, %f0;
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f16 %h<1>;
+          |
+          |    ex2.approx.bf16 %h0, %h0;
+          |    ret;
+          |}
+          |""".stripMargin
+      )
+    }
+
+    an[IllegalArgumentException] shouldBe thrownBy {
+      PtxAssembler.assemble(
+        """.version 8.0
+          |.target spinalgpu
+          |.address_size 32
+          |
+          |.visible .entry bad()
+          |{
+          |    .reg .f32 %f<1>;
+          |
+          |    exp.f32 %f0, %f0;
           |    ret;
           |}
           |""".stripMargin

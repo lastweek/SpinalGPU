@@ -77,6 +77,18 @@ Immediate and branch offsets are signed 14-bit values.
 | `0x38` | `cvtf16x2e5m2x2` | Convert packed `e5m2x2` carrier to packed FP16x2 |
 | `0x39` | `cvte4m3x2f16x2` | Convert packed FP16x2 to packed `e4m3x2` carrier with satfinite narrowing |
 | `0x3A` | `cvte5m2x2f16x2` | Convert packed FP16x2 to packed `e5m2x2` carrier with satfinite narrowing |
+| `0x40` | `frcp` | FP32 approximate reciprocal |
+| `0x41` | `fsqrt` | FP32 approximate square root |
+| `0x42` | `frsqrt` | FP32 approximate reciprocal square root |
+| `0x43` | `fsin` | FP32 approximate sine |
+| `0x44` | `fcos` | FP32 approximate cosine |
+| `0x45` | `flg2` | FP32 approximate base-2 logarithm |
+| `0x46` | `fex2` | FP32 approximate base-2 exponential |
+| `0x47` | `ftanh` | FP32 approximate hyperbolic tangent |
+| `0x48` | `hex2` | FP16 scalar approximate base-2 exponential |
+| `0x49` | `htanh` | FP16 scalar approximate hyperbolic tangent |
+| `0x4A` | `hex2x2` | Packed FP16x2 approximate base-2 exponential |
+| `0x4B` | `htanhx2` | Packed FP16x2 approximate hyperbolic tangent |
 | `0x50` | `ldmatrix_x4` | Tensor shared-memory load for four row-major `m8n8` FP16 tiles |
 | `0x51` | `ldmatrix_x2_trans` | Tensor shared-memory load for two transposed `m8n8` FP16 tiles |
 | `0x52` | `ldmatrix_x2` | Tensor shared-memory load for two row-major `m8n8` FP16 tiles |
@@ -89,7 +101,7 @@ Immediate and branch offsets are signed 14-bit values.
 | `0x59` | `tcgen05_mma_cta1_f16` | Async descriptor-driven dense FP16 tcgen05 MMA using shared-memory A/B and TMEM-backed C/D |
 | `0x5A` | `tcgen05_commit_cta1` | Wait until the pending tcgen05 MMA/commit class for the warp clears |
 
-Opcode range `0x40..0x4F` remains reserved for future SFU-machine instructions. Opcode range `0x5B..0x5F` remains reserved for future tensor-machine instructions.
+Opcode range `0x4C..0x4F` remains reserved for future SFU-machine instructions. Opcode range `0x5B..0x5F` remains reserved for future tensor-machine instructions.
 
 ## Register Model
 
@@ -127,6 +139,8 @@ Opcode range `0x40..0x4F` remains reserved for future SFU-machine instructions. 
 ## Execution Notes
 
 - `fadd`, `fmul`, `ffma`, `fsub`, `fabs`, `fneg`, `fseteq`, `fsetlt`, `hadd`, `hmul`, `hfma`, `hadd2`, `hmul2`, the low-precision conversion opcodes, and `sel` execute on the CUDA-core datapath.
+- `frcp`, `fsqrt`, `frsqrt`, `fsin`, `fcos`, `flg2`, `fex2`, `ftanh`, `hex2`, `htanh`, `hex2x2`, and `htanhx2` execute on the dedicated unary SFU datapath.
+- The scalar half SFU ops widen through FP32 internally and then narrow back to FP16. The packed half2 SFU ops apply that same path independently to both packed lanes.
 - `ffma`, `hfma`, `sel`, and the tensor opcodes are the current users of the `RRRR` format.
 - PTX `fma.rn.f32` lowers to machine `ffma`, but the current repo implementation computes it as FP32 multiply followed by FP32 add rather than a single-round fused IEEE FMA.
 - PTX `fma.rn.f16` lowers to machine `hfma` on the same three-source issue path, using the low 16 bits of each operand/result slot.

@@ -1,0 +1,59 @@
+// Purpose: Apply FP32 sin and cos SFU approximations to one scalar input per thread.
+// Primary feature: special_function
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread loads one FP32 angle-like value from global memory.
+// - The kernel runs `sin.approx.f32` and `cos.approx.f32` on that value.
+// - Both results are written to their own output vectors.
+// Where this fits:
+// - This is the trigonometric companion to `scalar_special_f32`.
+// - It keeps the trig pair isolated because both instructions share range-reduction behavior.
+// Key model details:
+// - `%tid.x` picks one scalar and `tid.x * 4` forms the FP32 byte offset.
+// - The kernel stores sine and cosine separately so the corpus can compare each stream exactly.
+// CUDA-equivalent sketch (.cu):
+// __global__ void trig_pair_f32(const float* in, float* out_sin, float* out_cos) {
+//   unsigned i = threadIdx.x;
+//   float x = in[i];
+//   out_sin[i] = __sinf(x);
+//   out_cos[i] = __cosf(x);
+// }
+// SpinalGPU note:
+// - This teaching kernel uses the repo's approximate trig model and does not claim CUDA libdevice accuracy.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry trig_pair_f32(
+    .param .u32 in_ptr,
+    .param .u32 out_sin_ptr,
+    .param .u32 out_cos_ptr
+)
+{
+    .reg .u32 %r<6>;
+    .reg .f32 %f<3>;
+
+    // Setup
+    // Load the three base pointers and convert the scalar thread index into a byte offset.
+    ld.param.u32 %r0, [in_ptr];
+    ld.param.u32 %r1, [out_sin_ptr];
+    ld.param.u32 %r2, [out_cos_ptr];
+    mov.u32 %r3, %tid.x;
+    shl.b32 %r4, %r3, 2;
+    add.u32 %r5, %r0, %r4;
+    ld.global.f32 %f0, [%r5];
+
+    // Core
+    // Apply the trig SFU pair to the same input scalar.
+    sin.approx.f32 %f1, %f0;
+    cos.approx.f32 %f2, %f0;
+
+    // Store sine and cosine to separate output streams.
+    add.u32 %r5, %r1, %r4;
+    st.global.f32 [%r5], %f1;
+    add.u32 %r5, %r2, %r4;
+    st.global.f32 [%r5], %f2;
+
+    // Exit
+    ret;
+}

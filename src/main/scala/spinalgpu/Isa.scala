@@ -50,6 +50,18 @@ object Opcode {
   val CVTF16X2E5M2X2 = 0x38
   val CVTE4M3X2F16X2 = 0x39
   val CVTE5M2X2F16X2 = 0x3A
+  val FRCP = 0x40
+  val FSQRT = 0x41
+  val FRSQRT = 0x42
+  val FSIN = 0x43
+  val FCOS = 0x44
+  val FLG2 = 0x45
+  val FEX2 = 0x46
+  val FTANH = 0x47
+  val HEX2 = 0x48
+  val HTANH = 0x49
+  val HEX2X2 = 0x4A
+  val HTANHX2 = 0x4B
   val LDMATRIX_X4 = 0x50
   val LDMATRIX_X2_TRANS = 0x51
   val LDMATRIX_X2 = 0x52
@@ -115,6 +127,18 @@ object Opcode {
     CVTF16X2E5M2X2 -> "cvtf16x2e5m2x2",
     CVTE4M3X2F16X2 -> "cvte4m3x2f16x2",
     CVTE5M2X2F16X2 -> "cvte5m2x2f16x2",
+    FRCP -> "frcp",
+    FSQRT -> "fsqrt",
+    FRSQRT -> "frsqrt",
+    FSIN -> "fsin",
+    FCOS -> "fcos",
+    FLG2 -> "flg2",
+    FEX2 -> "fex2",
+    FTANH -> "ftanh",
+    HEX2 -> "hex2",
+    HTANH -> "htanh",
+    HEX2X2 -> "hex2x2",
+    HTANHX2 -> "htanhx2",
     LDMATRIX_X4 -> "ldmatrix_x4",
     LDMATRIX_X2_TRANS -> "ldmatrix_x2_trans",
     LDMATRIX_X2 -> "ldmatrix_x2",
@@ -335,7 +359,10 @@ object Isa {
             Opcode.SHR | Opcode.SETEQ | Opcode.SETLT | Opcode.FADD | Opcode.FMUL | Opcode.SETLTS | Opcode.FSUB |
             Opcode.FABS | Opcode.FNEG | Opcode.FSETEQ | Opcode.FSETLT | Opcode.HADD | Opcode.HMUL | Opcode.HADD2 |
             Opcode.HMUL2 | Opcode.CVTF32F16 | Opcode.CVTF16F32 | Opcode.CVTF16X2E4M3X2 | Opcode.CVTF16X2E5M2X2 |
-            Opcode.CVTE4M3X2F16X2 | Opcode.CVTE5M2X2F16X2 => InstructionFormat.Rrr
+            Opcode.CVTE4M3X2F16X2 | Opcode.CVTE5M2X2F16X2 | Opcode.FRCP | Opcode.FSQRT | Opcode.FRSQRT |
+            Opcode.FSIN | Opcode.FCOS | Opcode.FLG2 | Opcode.FEX2 | Opcode.FTANH | Opcode.HEX2 | Opcode.HTANH |
+            Opcode.HEX2X2 | Opcode.HTANHX2 =>
+          InstructionFormat.Rrr
         case Opcode.FFMA | Opcode.SEL | Opcode.HFMA | Opcode.LDMATRIX_X4 | Opcode.LDMATRIX_X2_TRANS | Opcode.LDMATRIX_X2 |
             Opcode.MMA_SYNC_F16_F16_F16_F16 | Opcode.STMATRIX_X2 | Opcode.TCGEN05_LD_32X32B_X2 | Opcode.TCGEN05_ST_32X32B_X2 |
             Opcode.TCGEN05_WAIT_LD | Opcode.TCGEN05_WAIT_ST | Opcode.TCGEN05_MMA_CTA1_F16 | Opcode.TCGEN05_COMMIT_CTA1 =>

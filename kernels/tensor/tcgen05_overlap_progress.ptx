@@ -1,4 +1,4 @@
-// Purpose: Prove another warp can make forward progress while one warp has a pending tcgen05 load in the same sub-SM.
+// Purpose: Prove one warp can keep making progress while another warp has a pending tcgen05 load in the same sub-SM.
 // Primary feature: tensor_core
 // Expected outcome: success
 //

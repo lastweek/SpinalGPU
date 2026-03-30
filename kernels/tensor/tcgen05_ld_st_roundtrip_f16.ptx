@@ -1,4 +1,4 @@
-// Purpose: Round-trip one packed FP16 tensor tile through tcgen05 tensor-memory store and load.
+// Purpose: Round-trip one packed FP16 tensor tile through tcgen05.st and tcgen05.ld.
 // Primary feature: tensor_core
 // Expected outcome: success
 //

@@ -37,6 +37,7 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `PA11` | `PtxAssemblerSpec`: lowers `.v2/.v4 .f32` tuple `mov/ld/st.global` and rejects malformed vector tuples |
 | `PA12` | `PtxAssemblerSpec`: allocates `%h/%x/%b` from the shared physical pool and lowers the supported FP16 and FP8 conversion subset |
 | `PA13` | `PtxAssemblerSpec`: lowers the minimal tensor PTX surface and rejects malformed tensor tuples/operands |
+| `PA14` | `PtxAssemblerSpec`: lowers the supported unary SFU PTX surface and rejects unsupported SFU spellings such as `.ftz`, BF16, exact-rounding forms, and derived math |
 | `TCG1` | `Tcgen05FrontendSpec`: encodes/decodes/disassembles the narrow tcgen05 machine-op slice and assembles the supported tcgen05 PTX spellings |
 | `TCG2` | `Tcgen05BlockSpec`: exact tcgen05 TMEM load/store, dense FP16 MMA, and tcgen05 protocol fault behavior |
 | `TCG3` | `StreamingMultiprocessorTcgen05Spec` / `GpuTopTcgen05Spec`: the tcgen05 round-trip, dense MMA, and hazard kernels complete through both execution harnesses |
@@ -47,6 +48,8 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `CU1` | `CudaCoreArraySpec`: integer subwarp slicing plus FP32 `fadd`/`ffma` return exact lane results |
 | `CU2` | `CudaCoreArraySpec`: signed compare, branchless select, and scalar FP unary/compare ops return exact lane results |
 | `CU3` | `CudaCoreArraySpec`: FP16 scalar and packed ops plus packed FP8 conversion ops return exact lane results |
+| `SFU1` | `SfuArchitectureSpec`: the SFU path elaborates inside `SmExecutionCore` across default and reduced subwarp configs |
+| `SFU2` | `SpecialFunctionUnitSpec`: unary SFU latency, masking, corner cases, reference vectors, and `tanh.approx.f32` behavior are checked directly |
 | `LSU1` | `LoadStoreUnitSpec`: contiguous global accesses coalesce into bursts and sparse accesses split correctly |
 | `LSU2` | `LoadStoreUnitSpec`: halfword global loads extract the addressed 16-bit lane from narrow bursts |
 | `AXI1` | `ExternalMemoryAxiAdapterSpec`: burst reads and writes drive AXI multi-beat traffic correctly |
@@ -86,6 +89,10 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `SM33` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_mul_e4m3x2_accum_f32` completes and writes expected FP32 matrix products from packed E4M3x2 inputs |
 | `SM34` | `StreamingMultiprocessorKernelCorpusSpec`: `matrix_mul_e5m2x2_accum_f32` completes and writes expected FP32 matrix products from packed E5M2x2 inputs |
 | `SM35` | `StreamingMultiprocessorTensorSpec`: the tensor-only `ldmatrix/stmatrix` round-trip and FP16 MMA kernels complete through the SM harness |
+| `SM36` | `StreamingMultiprocessorKernelCorpusSpec`: `scalar_special_f32` completes and writes expected FP32 SFU result streams |
+| `SM37` | `StreamingMultiprocessorKernelCorpusSpec`: `trig_pair_f32` completes and writes expected FP32 `sin/cos` SFU result streams |
+| `SM38` | `StreamingMultiprocessorKernelCorpusSpec`: `scalar_special_f16` completes and writes expected FP16 SFU results |
+| `SM39` | `StreamingMultiprocessorKernelCorpusSpec`: `vector_special_f16x2` completes and writes expected packed FP16x2 SFU results |
 | `GT1` | `GpuTopSimSpec`: `GpuTop` exposes idle AXI memory and AXI-Lite control boundaries |
 | `GT2` | `ExecutionFrontendSimSpec`: `grid_id_store` increments across successive `GpuTop` launches |
 | `GT3` | `ExecutionFrontendSimSpec`: `matrix_add_f32` executes through `GpuTop` and writes expected FP32 output |
@@ -103,6 +110,7 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | `GT15` | `MultiSmGpuTopSpec`: `trap_block_one` executes through `GpuTop` and stops later CTA dispatch after the first CTA trap |
 | `GT16` | `MultiSmGpuTopSpec`: `matrix_add_multi_block_f32` executes through `GpuTop` across a real 2D CTA grid |
 | `GT17` | `GpuTopTensorSpec`: the tensor-only `ldmatrix/stmatrix` round-trip and FP16 MMA kernels complete through `GpuTop` |
+| `GT18` | `ExecutionFrontendSimSpec`: `scalar_special_f32` executes through `GpuTop` and writes expected FP32 SFU outputs |
 | `TC1` | `TensorCoreBlockSpec`: exact `ldmatrix`, `mma`, `stmatrix`, and tensor fault behavior for the FP16 tensor v1 slice |
 | `GD1` | `GridDispatchControllerSpec`: dispatcher walks CTA coordinates in `x -> y -> z` order |
 | `GD2` | `GridDispatchControllerSpec`: dispatcher round-robins CTAs across SMs and backfills idle SMs |
@@ -116,9 +124,9 @@ SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by 
 | Module and entry contract | `Partial` | `Direct` | One `.visible .entry` per file, `.param .u32` only |
 | Types, registers, and predicates | `Partial` | `Direct` | `.u32`, `.f32`, `.f16`, `.f16x2`, and `.b16` share one physical 32-bit register pool; PTX vector tuples reuse `%f` registers; `%gridid` remains the only narrow public `.u64` path |
 | Special registers | `Partial` | `Direct` | `tid/ntid/ctaid/nctaid.{x,y,z}` plus core SIMT/SM builtins are covered directly; `%gridid` remains a narrow `.u64` path |
-| Instruction surface | `Partial` | `Direct` | Integer, control, FP32 CUDA-core ops, FP16 scalar/packed ops, packed FP8 conversion ops, the legacy FP16 tensor v1 surface, the narrow tcgen05 FP16 v2 surface, PTX vector `.v2/.v4 .f32` tuple movement, and narrow `.u64` data movement are implemented for the documented subset |
+| Instruction surface | `Partial` | `Direct` | Integer, control, FP32 CUDA-core ops, unary SFU ops, FP16 scalar/packed ops, packed FP8 conversion ops, the legacy FP16 tensor v1 surface, the narrow tcgen05 FP16 v2 surface, PTX vector `.v2/.v4 .f32` tuple movement, and narrow `.u64` data movement are implemented for the documented subset |
 | Memory spaces and addressing | `Partial` | `Direct` | `.param`, `.global`, and `.shared` only in the general PTX surface, plus the narrow tcgen05 Tensor Memory path; aligned 16-bit and 32-bit global accesses, FP16/FP32 global traffic, packed FP8 carriers in `.b16`, coalesced bursts, PTX vector tuple loads/stores lowered element-wise, lowered `st.global.u64`, the legacy tensor shared-memory row-address protocol, and fixed-window TMEM addressing through tcgen05 |
-| Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, BF16, broad `cvt.*`, SFU, sync, atomics, calls, and broad compiler-generated PTX remain out of scope; tensor support is still limited to the legacy FP16 tensor v1 slice plus the narrow tcgen05 FP16 v2 slice below |
+| Currently unsupported PTX families | `Rejected` | `Direct` | `.const`, `.local`, BF16, broad `cvt.*`, sync, atomics, calls, broad compiler-generated PTX, and SFU spellings beyond the documented unary `.approx` subset remain out of scope; tensor support is still limited to the legacy FP16 tensor v1 slice plus the narrow tcgen05 FP16 v2 slice below |
 
 ## Matrix V1 Note
 
@@ -176,11 +184,11 @@ Low-precision CUDA-core kernels extend that same matrix v1 model rather than def
 | `.reg .u64` | PTX virtual registers for 64-bit scalar values | `Partial` | `Direct` | `PA6`, `SM13`, `GT2` | Supported only for `%gridid` materialization and `st.global.u64`; `.u64` arithmetic and loads remain unsupported. |
 | 32-bit scalar integer execution | A backend must provide typed scalar integer execution for the supported subset | `Implemented` | `Direct` | `SM4`, `SM5`, `SM7`, `SM14`, `SM15` | Integer address arithmetic, loop control, predicates, and shared/global indexing execute on the CUDA-core integer path. |
 | 32-bit scalar FP execution | A backend must provide typed FP32 execution for the supported subset | `Implemented` | `Direct` | `CU1`, `CU2`, `SM14`, `SM15`, `SM16`, `SM17`, `SM18`, `GT3`, `GT4`, `GT5` | `add.f32`, `mul.f32`, `sub.f32`, `neg.f32`, `abs.f32`, ordered `setp.*.f32`, `selp.f32`, and PTX `fma.rn.f32` are implemented on the CUDA-core path. The current `fma.rn.f32` lowering is a three-source multiply-add, not a single-round fused IEEE FMA. |
-| FP16 scalar and packed execution | A backend must provide typed low-precision execution for the supported subset | `Implemented` | `Direct` | `PA12`, `CU3`, `SM25`, `SM26`, `SM27`, `SM28`, `GT8`, `GT9` | `add.rn.f16`, `mul.rn.f16`, `fma.rn.f16`, `add.rn.f16x2`, `mul.rn.f16x2`, `cvt.f32.f16`, and `cvt.rn.f16.f32` execute on the CUDA-core datapath. |
+| FP16 scalar and packed execution | A backend must provide typed low-precision execution for the supported subset | `Implemented` | `Direct` | `PA12`, `PA14`, `CU3`, `SFU2`, `SM25`, `SM26`, `SM27`, `SM28`, `SM38`, `SM39`, `GT8`, `GT9` | `add.rn.f16`, `mul.rn.f16`, `fma.rn.f16`, `add.rn.f16x2`, `mul.rn.f16x2`, `cvt.f32.f16`, `cvt.rn.f16.f32`, `ex2.approx.f16`, `tanh.approx.f16`, `ex2.approx.f16x2`, and `tanh.approx.f16x2` are implemented. |
 | Packed FP8 alternate-format conversion | PTX alternate floating-point formats must be representable when supported | `Implemented` | `Direct` | `PA12`, `CU3`, `SM29`, `SM30`, `SM31`, `SM32`, `SM33`, `SM34`, `GT10`, `GT11` | SpinalGPU supports packed `e4m3x2` and `e5m2x2` carriers via `.b16` plus conversion to and from `.f16x2`. There is no public scalar `.e4m3` or `.e5m2` register family. |
 | `.pred` support | PTX uses predicate registers for condition evaluation and branch predication | `Partial` | `Direct` | `PA2`, `SM5`, `SM10` | Predicates lower to compiler-managed integer-backed condition values, not a native PTX-style predicate register file. |
 | Wider and alternate integer widths beyond the narrow `%gridid` path (`.s64`, general `.u64`, `.u16`, `.u8`) | PTX supports multiple integer widths | `Rejected` | `Direct` | `PA4` | General non-`%gridid` wider integer support is still rejected by the frontend. |
-| Floating-point families beyond the current FP32/FP16/packed-FP8 subset (`.f64`, BF16, unordered compares, and tensor formats) | PTX supports broader scalar FP, vector, and packed element types | `Partial` | `Direct` | `PA4`, `PA12` | The current accepted low-precision surface is limited to `.f16`, `.f16x2`, `.b16` packed FP8 carriers, and the explicit conversion/arithmetic forms documented below. |
+| Floating-point families beyond the current FP32/FP16/packed-FP8 subset (`.f64`, BF16, unordered compares, and tensor formats) | PTX supports broader scalar FP, vector, and packed element types | `Partial` | `Direct` | `PA4`, `PA12`, `PA14` | The current accepted surface is limited to FP32 CUDA-core arithmetic, the unary `.approx` SFU subset, `.f16`, `.f16x2`, `.b16` packed FP8 carriers, and the explicit conversion/arithmetic forms documented below. |
 
 ## Special Registers
 
@@ -211,9 +219,11 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | `add.f32` | FP32 addition on the CUDA-core datapath | `Implemented` | `Direct` | `PA7`, `CU1`, `SM14`, `GT3` | Lowered to machine `fadd`. |
 | `mul.f32` | FP32 multiplication on the CUDA-core datapath | `Implemented` | `Direct` | `PA7`, `SM15`, `GT4` | Lowered to machine `fmul`. |
 | `sub.f32`, `neg.f32`, `abs.f32` | Scalar FP32 subtract and unary ops | `Implemented` | `Direct` | `PA9`, `CU2`, `SM18` | Lower directly to machine `fsub`, `fneg`, and `fabs`. |
+| `rcp.approx.f32`, `sqrt.approx.f32`, `rsqrt.approx.f32`, `sin.approx.f32`, `cos.approx.f32`, `lg2.approx.f32`, `ex2.approx.f32`, `tanh.approx.f32` | Unary FP32 special-function instructions on the SFU datapath | `Implemented` | `Direct` | `PA14`, `SFU1`, `SFU2`, `SM36`, `SM37`, `GT18` | Lower directly to machine `frcp`, `fsqrt`, `frsqrt`, `fsin`, `fcos`, `flg2`, `fex2`, and `ftanh`. The repo targets PTX-visible edge behavior, not bit-exact NVIDIA MUFU output. |
 | `fma.rn.f32` | FP32 three-source multiply-add on the CUDA-core datapath | `Implemented` | `Direct` | `PA7`, `CU1`, `SM15`, `SM17`, `GT4`, `GT5` | Lowered to machine `ffma` with a dedicated three-source encoding. The current repo implementation rounds the multiply and add stages separately rather than providing a single-round fused IEEE FMA. |
 | `add.rn.f16`, `mul.rn.f16`, `fma.rn.f16` | Scalar FP16 arithmetic on the CUDA-core datapath | `Implemented` | `Direct` | `PA12`, `CU3`, `SM25`, `SM27`, `SM28`, `GT8`, `GT9` | Lower directly to machine `hadd`, `hmul`, and `hfma`. |
 | `add.rn.f16x2`, `mul.rn.f16x2` | Packed FP16x2 arithmetic on the CUDA-core datapath | `Implemented` | `Direct` | `PA12`, `CU3`, `SM26` | Lower directly to machine `hadd2` and `hmul2`. |
+| `ex2.approx.f16`, `tanh.approx.f16`, `ex2.approx.f16x2`, `tanh.approx.f16x2` | Low-precision unary SFU instructions | `Implemented` | `Direct` | `PA14`, `SFU2`, `SM38`, `SM39` | Lower directly to machine `hex2`, `htanh`, `hex2x2`, and `htanhx2`. The scalar and packed half forms widen through the FP32 SFU core and then narrow back. |
 | `cvt.f32.f16`, `cvt.rn.f16.f32` | FP16/FP32 scalar conversion | `Implemented` | `Direct` | `PA12`, `CU3`, `SM28`, `SM33`, `SM34`, `GT9`, `GT11` | Lower directly to machine `cvtf32f16` and `cvtf16f32`. |
 | `cvt.rn.f16x2.e4m3x2`, `cvt.rn.f16x2.e5m2x2` | Packed FP8 carrier to packed FP16x2 conversion | `Implemented` | `Direct` | `PA12`, `CU3`, `SM29`, `SM30`, `SM33`, `SM34`, `GT11` | Converts packed `.b16` carriers into one `%x` register. The supported alternate FP8 formats are `e4m3x2` and `e5m2x2` only. |
 | `cvt.satfinite.e4m3x2.f16x2`, `cvt.satfinite.e5m2x2.f16x2` | Packed FP16x2 to packed FP8 carrier narrowing | `Implemented` | `Direct` | `PA12`, `CU3`, `SM31`, `SM32`, `GT10` | Narrows one `%x` register to one packed `.b16` carrier using satfinite semantics. |
@@ -254,8 +264,7 @@ Repo-specific note: `%argbase` is accepted by the current assembler as a SpinalG
 | --- | --- | --- | --- | --- | --- |
 | `.const` state space | PTX defines constant memory and constant-space loads | `Rejected` | `Direct` | `PA4` | `.const` declarations are rejected by the frontend today. |
 | `.local` state space | PTX defines per-thread local memory and spill-like addressing | `Rejected` | `None` | none | No `.local` declarations, addressing, or lowering path exists. |
-| Floating-point families beyond the current FP32/FP16/packed-FP8 subset | PTX supports broader FP ALU, conversions, rounding modes, unordered compares, richer literal forms, and native packed/vector arithmetic | `Rejected` | `Direct` | `PA4`, `PA12` | Today the accepted floating-point surface is the FP32 subset, FP16 scalar/packed arithmetic, scalar `f16 <-> f32` conversion, packed `e4m3x2/e5m2x2 <-> f16x2` conversion, `ld/st.global.f16`, `ld/st.global.f16x2`, and `ld/st.global.b16`. BF16, `.f64`, unordered FP compares, low-precision shared-memory PTX, and native packed vector ALU beyond `f16x2` remain unsupported. |
-| SFU instructions | PTX includes special-function instructions such as reciprocal and transcendental ops | `Rejected` | `None` | none | No PTX SFU mnemonics are accepted yet. |
+| Floating-point families beyond the current FP32/FP16/packed-FP8 subset | PTX supports broader FP ALU, conversions, rounding modes, unordered compares, richer literal forms, and native packed/vector arithmetic | `Rejected` | `Direct` | `PA4`, `PA12`, `PA14` | Today the accepted floating-point surface is the FP32 CUDA-core subset, the unary `.approx` SFU subset, FP16 scalar/packed arithmetic, scalar `f16 <-> f32` conversion, packed `e4m3x2/e5m2x2 <-> f16x2` conversion, `ld/st.global.f16`, `ld/st.global.f16x2`, and `ld/st.global.b16`. BF16, `.f64`, unordered FP compares, low-precision shared-memory PTX, native packed vector ALU beyond `f16x2`, and exact-rounding or `.ftz` SFU spellings remain unsupported. |
 | Tensor and MMA instructions beyond the documented legacy FP16 tensor v1 slice plus the narrow tcgen05 FP16 v2 slice | PTX includes broad tensor fragment, MMA, sparse, and tensor-memory instruction families | `Rejected` | `Direct` | `PA13`, `TC1`, `TCG1`, `TCG2`, `TCG3`, `TCG4`, `SM35`, `GT17` | The public tensor surface currently accepts only the five legacy FP16 tensor-v1 spellings and the six documented tcgen05 v2 spellings above. `wmma.*`, sparse MMA, FP8/FP4 tcgen05, `cta_group::2`, alloc/dealloc, block scaling, and the rest of the NVIDIA tensor surface remain intentionally out of scope. |
 | Barriers and synchronization | PTX includes CTA sync, async copy coordination, and barrier objects | `Rejected` | `None` | none | No PTX-visible barrier or synchronization instructions exist in the current frontend/runtime path. |
 | Atomics and reductions | PTX includes atomic and reduction memory operations | `Rejected` | `None` | none | No atomic lowering or memory-ordering support exists. |

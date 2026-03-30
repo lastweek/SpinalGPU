@@ -1,4 +1,4 @@
-// Purpose: Execute one real tensor-core FP16 matrix multiply-accumulate tile and store the FP16 result tile.
+// Purpose: Execute one m16n8k16 FP16 tensor MMA tile using ldmatrix + mma + stmatrix.
 // Primary feature: tensor_core
 // Expected outcome: success
 //

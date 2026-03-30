@@ -160,6 +160,47 @@ class IsaSpec extends AnyFunSuite with Matchers {
     Isa.disassemble(stmatrix) shouldBe "stmatrix_x2 r0, r13, r14, r0"
   }
 
+  test("encodes, decodes, and disassembles unary SFU opcodes") {
+    val frcp = Isa.encodeRrr(Opcode.FRCP, rd = 1, rs0 = 2, rs1 = 0)
+    val fsqrt = Isa.encodeRrr(Opcode.FSQRT, rd = 3, rs0 = 4, rs1 = 0)
+    val frsqrt = Isa.encodeRrr(Opcode.FRSQRT, rd = 5, rs0 = 6, rs1 = 0)
+    val fsin = Isa.encodeRrr(Opcode.FSIN, rd = 7, rs0 = 8, rs1 = 0)
+    val fcos = Isa.encodeRrr(Opcode.FCOS, rd = 9, rs0 = 10, rs1 = 0)
+    val flg2 = Isa.encodeRrr(Opcode.FLG2, rd = 11, rs0 = 12, rs1 = 0)
+    val fex2 = Isa.encodeRrr(Opcode.FEX2, rd = 13, rs0 = 14, rs1 = 0)
+    val ftanh = Isa.encodeRrr(Opcode.FTANH, rd = 15, rs0 = 16, rs1 = 0)
+    val hex2 = Isa.encodeRrr(Opcode.HEX2, rd = 17, rs0 = 18, rs1 = 0)
+    val htanh = Isa.encodeRrr(Opcode.HTANH, rd = 19, rs0 = 20, rs1 = 0)
+    val hex2x2 = Isa.encodeRrr(Opcode.HEX2X2, rd = 21, rs0 = 22, rs1 = 0)
+    val htanhx2 = Isa.encodeRrr(Opcode.HTANHX2, rd = 23, rs0 = 24, rs1 = 0)
+
+    Isa.decodeWord(frcp).opcode shouldBe Opcode.FRCP
+    Isa.decodeWord(fsqrt).opcode shouldBe Opcode.FSQRT
+    Isa.decodeWord(frsqrt).opcode shouldBe Opcode.FRSQRT
+    Isa.decodeWord(fsin).opcode shouldBe Opcode.FSIN
+    Isa.decodeWord(fcos).opcode shouldBe Opcode.FCOS
+    Isa.decodeWord(flg2).opcode shouldBe Opcode.FLG2
+    Isa.decodeWord(fex2).opcode shouldBe Opcode.FEX2
+    Isa.decodeWord(ftanh).opcode shouldBe Opcode.FTANH
+    Isa.decodeWord(hex2).opcode shouldBe Opcode.HEX2
+    Isa.decodeWord(htanh).opcode shouldBe Opcode.HTANH
+    Isa.decodeWord(hex2x2).opcode shouldBe Opcode.HEX2X2
+    Isa.decodeWord(htanhx2).opcode shouldBe Opcode.HTANHX2
+
+    Isa.disassemble(frcp) shouldBe "frcp r1, r2, r0"
+    Isa.disassemble(fsqrt) shouldBe "fsqrt r3, r4, r0"
+    Isa.disassemble(frsqrt) shouldBe "frsqrt r5, r6, r0"
+    Isa.disassemble(fsin) shouldBe "fsin r7, r8, r0"
+    Isa.disassemble(fcos) shouldBe "fcos r9, r10, r0"
+    Isa.disassemble(flg2) shouldBe "flg2 r11, r12, r0"
+    Isa.disassemble(fex2) shouldBe "fex2 r13, r14, r0"
+    Isa.disassemble(ftanh) shouldBe "ftanh r15, r16, r0"
+    Isa.disassemble(hex2) shouldBe "hex2 r17, r18, r0"
+    Isa.disassemble(htanh) shouldBe "htanh r19, r20, r0"
+    Isa.disassemble(hex2x2) shouldBe "hex2x2 r21, r22, r0"
+    Isa.disassemble(htanhx2) shouldBe "htanhx2 r23, r24, r0"
+  }
+
   test("machine-code disassembler formats representative instructions") {
     Isa.disassemble(Isa.encodeRrr(Opcode.ADD, rd = 3, rs0 = 1, rs1 = 2)) shouldBe "add r3, r1, r2"
     Isa.disassemble(Isa.encodeRrr(Opcode.FADD, rd = 6, rs0 = 7, rs1 = 8)) shouldBe "fadd r6, r7, r8"

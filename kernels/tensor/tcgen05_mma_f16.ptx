@@ -1,4 +1,4 @@
-// Purpose: Execute one descriptor-driven tcgen05 FP16 MMA tile and store the packed FP16 result words.
+// Purpose: Execute one descriptor-driven tcgen05 FP16 MMA tile using shared-memory A/B and TMEM-backed D.
 // Primary feature: tensor_core
 // Expected outcome: success
 //

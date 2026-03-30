@@ -1,0 +1,59 @@
+// Purpose: Apply packed FP16x2 `ex2.approx` and `tanh.approx` lane-wise through the SFU path.
+// Primary feature: special_function
+// Expected outcome: success
+// High-level execution flow:
+// - Each thread loads one packed `f16x2` tuple from global memory.
+// - The kernel applies the packed `ex2.approx` and `tanh.approx` instructions,
+// - and stores both packed outputs back to global memory.
+// Where this fits:
+// - This is the packed low-precision SFU kernel.
+// - It proves that both half lanes are processed independently inside one physical 32-bit register word.
+// Key model details:
+// - Each packed half2-style tuple occupies 4 bytes in global memory.
+// - The SFU treats the low and high FP16 lanes independently even though they travel together through `%x`.
+// CUDA-equivalent sketch (.cu):
+// __global__ void vector_special_f16x2(const half2* in, half2* out_ex2, half2* out_tanh) {
+//   unsigned i = threadIdx.x;
+//   half2 x = in[i];
+//   out_ex2[i] = h2exp2(x);
+//   out_tanh[i] = h2tanh(x);
+// }
+// SpinalGPU note:
+// - `f16x2` here is the repo's packed half2-style PTX register family, not a brace-tuple `%f` vector.
+.version 8.0
+.target spinalgpu
+.address_size 32
+
+.visible .entry vector_special_f16x2(
+    .param .u32 in_ptr,
+    .param .u32 out_ex2_ptr,
+    .param .u32 out_tanh_ptr
+)
+{
+    .reg .u32 %r<6>;
+    .reg .f16x2 %x<3>;
+
+    // Setup
+    // Load the three base pointers and build the 4-byte packed tuple offset for this thread.
+    ld.param.u32 %r0, [in_ptr];
+    ld.param.u32 %r1, [out_ex2_ptr];
+    ld.param.u32 %r2, [out_tanh_ptr];
+    mov.u32 %r3, %tid.x;
+    shl.b32 %r4, %r3, 2;
+    add.u32 %r5, %r0, %r4;
+    ld.global.f16x2 %x0, [%r5];
+
+    // Core
+    // Apply the packed SFU pair lane-wise.
+    ex2.approx.f16x2 %x1, %x0;
+    tanh.approx.f16x2 %x2, %x0;
+
+    // Store the packed results.
+    add.u32 %r5, %r1, %r4;
+    st.global.f16x2 [%r5], %x1;
+    add.u32 %r5, %r2, %r4;
+    st.global.f16x2 [%r5], %x2;
+
+    // Exit
+    ret;
+}

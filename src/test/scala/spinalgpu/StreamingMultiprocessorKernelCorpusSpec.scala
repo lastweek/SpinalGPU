@@ -24,6 +24,7 @@ class StreamingMultiprocessorCorpusSmokeSpec
       Seq(
         KernelCorpus.addStoreExit,
         KernelCorpus.threadIdStore,
+        KernelCorpus.scalarSpecialF32,
         KernelCorpus.sharedRoundtrip,
         KernelCorpus.vectorAddF32x4,
         KernelCorpus.matrixAddF32,

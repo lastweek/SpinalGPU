@@ -1,4 +1,4 @@
-// Purpose: Load one tensor-core row-major tile pair from shared memory and store it back unchanged.
+// Purpose: Round-trip two packed FP16 tensor tiles through ldmatrix.x2 and stmatrix.x2.
 // Primary feature: tensor_core
 // Expected outcome: success
 //

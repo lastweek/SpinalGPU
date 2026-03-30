@@ -216,7 +216,7 @@ case class SfuReq(config: SmConfig) extends Bundle {
   val warpId = UInt(config.warpIdWidth bits)
   val opcode = Bits(8 bits)
   val activeMask = Bits(config.warpSize bits)
-  val operand = Vec(UInt(config.dataWidth bits), config.warpSize)
+  val operand = Vec(Bits(config.dataWidth bits), config.warpSize)
 }
 
 case class SfuRsp(config: SmConfig) extends Bundle {
