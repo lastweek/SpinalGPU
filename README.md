@@ -46,6 +46,23 @@ These values describe `GpuConfig.default`; the source-of-truth configuration sur
 
 Tensor note: legacy `TensorCoreBlock` and `tcgen05` are implemented, but their current inner compute loops serialize one FP16 FMA per cycle per partition, so this README intentionally omits a headline tensor-throughput row.
 
+## Current Feature Status
+
+Status labels below match the support meanings in [`docs/isa.md`](docs/isa.md): `Implemented`, `Partial`, and `Rejected`.
+
+| Area | Status | Current scope | Details |
+| --- | --- | --- | --- |
+| Execution and launch model | `Partial` | Classic SIMT v1 with real 3D CTA grids | One kernel globally in flight, one resident CTA per SM, and no divergent reconvergence |
+| PTX module and entry contract | `Partial` | Repo PTX subset only | One `.visible .entry` per file, `.param .u32` only, lowered into the custom SpinalGPU machine encoding |
+| CUDA-core arithmetic | `Implemented` | INT32, FP32, FP16, FP16x2, and packed FP8 conversion | The documented CUDA-core subset executes on the current `CudaCoreArray` path |
+| Special-function unit | `Implemented` | Unary `.approx` FP32 plus FP16 / FP16x2 `ex2` and `tanh` | The current SFU surface is intentionally limited to the documented unary subset |
+| Memory surface | `Partial` | `.param`, `.global`, and `.shared` only | Global traffic supports aligned 16-bit and 32-bit accesses; shared-memory PTX is still word-oriented only |
+| Special registers and grid builtins | `Implemented` | Core SIMT, SM, and grid builtins are real | `%gridid` remains a narrow `.u64` path even though `%tid/%ntid/%ctaid/%nctaid/%smid/%nsmid` are live |
+| Tensor surface | `Partial` | Legacy FP16 tensor v1 plus narrow FP16 `tcgen05` | Broad NVIDIA tensor families remain intentionally out of scope |
+| Explicitly unsupported PTX families | `Rejected` | Major PTX families stay out of scope in v1 | `.const`, `.local`, atomics, barriers, calls, BF16/FP64, broad `wmma.*`, broad `tcgen05`, and generic compiler-generated PTX are rejected |
+
+`Partial` here means “implemented for a narrower educational subset than full PTX,” not “broken.” See [`docs/isa.md`](docs/isa.md) and [`docs/architecture.md`](docs/architecture.md) for the full compatibility and execution-model detail.
+
 ## Prerequisites
 
 - JDK 17
