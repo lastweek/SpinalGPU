@@ -4,6 +4,48 @@ Educational GPU architecture exploration in SpinalHDL.
 
 SpinalGPU implements a PTX subset ISA with a custom binary encoding executed by the hardware.
 
+## Default SpinalGPU Specification
+
+### Microarchitecture
+
+| Spec | Default | Config / derivation source |
+| --- | --- | --- |
+| Physical SMs | 1 | `GpuConfig.default.cluster.smCount` |
+| Max resident CTAs per SM | 1 | Current execution model in [`docs/architecture.md`](docs/architecture.md) |
+| Warp size | 32 | `SmConfig.default.warpSize` |
+| Sub-SM partitions per SM | 4 | `SmConfig.default.subSmCount` |
+| Resident warps per sub-SM | 2 | `SmConfig.default.residentWarpsPerSubSm` |
+| Max resident warps per SM | 8 | `residentWarpCount = subSmCount * residentWarpsPerSubSm` |
+| Max resident threads per SM | 256 | `maxBlockThreads = residentWarpCount * warpSize` |
+| CUDA issue lanes per sub-SM | 32 | `SmConfig.default.subSmIssueWidth` |
+| Active CUDA lanes per SM | 128 | `subSmCount * subSmIssueWidth` |
+| Registers per thread | 32 | `SmConfig.default.registerCount` |
+| Shared memory per SM | 4 KiB | `SmConfig.default.sharedMemoryBytes` |
+| Shared memory banks | 32 | `SmConfig.default.sharedMemoryBankCount` |
+| Tensor memory per warp | 512 B | `SmConfig.default.tensorMemoryBytesPerWarp` |
+| Tensor memory per SM | 4 KiB | `tensorMemoryBytes = tensorMemoryBytesPerWarp * residentWarpCount` |
+
+### Compute Throughput (sustained, per cycle)
+
+All rows below show two aggregation levels:
+- `Per sub-SM partition`: one local `CudaCoreArray` issue slice
+- `Per physical SM`: the sum across all 4 default sub-SM partitions
+
+With `SmConfig.default`, each sub-SM partition has `32` CUDA issue lanes and covers one full `32`-thread warp per issued instruction because `warpSize == subSmIssueWidth == 32`. If you want a sustained per-lane rate, divide the per-partition number by `32`.
+
+| Operation | Per sub-SM partition | Per physical SM (default) | Config / derivation source |
+| --- | --- | --- | --- |
+| FP32 add / mul | 8 FLOPs/cycle | 32 FLOPs/cycle | `subSmIssueWidth(32) / fpAddLatency(4)` per partition, then `subSmCount(4) * ...` per SM |
+| FP32 FMA | 12.8 FLOPs/cycle | 51.2 FLOPs/cycle | `subSmIssueWidth(32) * 2 / fpFmaLatency(5)` per partition, then `subSmCount(4) * ...` per SM |
+| FP16 scalar add / mul | 8 FLOPs/cycle | 32 FLOPs/cycle | `subSmIssueWidth(32) / fp16ScalarLatency(4)` per partition, then `subSmCount(4) * ...` per SM |
+| FP16 scalar FMA | 16 FLOPs/cycle | 64 FLOPs/cycle | `subSmIssueWidth(32) * 2 / fp16ScalarLatency(4)` per partition, then `subSmCount(4) * ...` per SM |
+| FP16 packed `f16x2` add / mul | 16 FLOPs/cycle | 64 FLOPs/cycle | `subSmIssueWidth(32) * 2 / fp16x2Latency(4)` per partition, then `subSmCount(4) * ...` per SM |
+| FP8 arithmetic | 0 FLOPs/cycle | 0 FLOPs/cycle | Current CUDA path implements FP8 conversion only |
+
+These values describe `GpuConfig.default`; the source-of-truth configuration surfaces are [`GpuConfig.scala`](src/main/scala/spinalgpu/GpuConfig.scala) and [`SmConfig.scala`](src/main/scala/spinalgpu/SmConfig.scala). The terminology here stays architecture-accurate and the throughput rows reflect current implemented datapaths and sustained latency-gated behavior, not clock-based marketing peaks. `FMA` counts as 2 FLOPs.
+
+Tensor note: legacy `TensorCoreBlock` and `tcgen05` are implemented, but their current inner compute loops serialize one FP16 FMA per cycle per partition, so this README intentionally omits a headline tensor-throughput row.
+
 ## Prerequisites
 
 - JDK 17
