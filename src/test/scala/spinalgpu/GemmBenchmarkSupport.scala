@@ -52,14 +52,14 @@ object GemmBenchmarkSupport {
   case object Tcgen05Fp16 extends BenchmarkKernel {
     override val id: String = "tcgen05"
     override val label: String = "tcgen05"
-    override val sharedBytes: Int = 3 * 1024
+    override val sharedBytes: Int = 0
     override val binaryPath: Path = BenchmarkKernelCatalog.tcgen05GemmF16.binaryPath
 
     override def command(shape: GemmBenchmarkShape): spinalgpu.toolchain.KernelCorpus.KernelCommand =
       spinalgpu.toolchain.KernelCorpus.KernelCommand(
         entryPc = EntryPc,
         blockDimX = 32,
-        blockDimY = 4,
+        blockDimY = 1,
         gridDimX = 1,
         gridDimY = 1,
         argBase = ArgBase,
@@ -254,7 +254,7 @@ object GemmBenchmarkSupport {
       dut.clockDomain.waitSampling()
       dut.clockDomain.deassertReset()
 
-      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig())
+      val memory = AxiMemorySim(dut.io.memory, dut.clockDomain, AxiMemorySimConfig(readResponseDelay = 0, writeResponseDelay = 0))
       memory.start()
 
       ExecutionTestUtils.loadBinaryFile(memory, EntryPc, kernel.binaryPath, config.byteCount)
