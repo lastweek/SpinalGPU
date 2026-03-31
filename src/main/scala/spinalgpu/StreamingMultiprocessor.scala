@@ -41,6 +41,8 @@ case class StreamingMultiprocessorDebugIo(config: GpuConfig) extends Bundle {
   val subSmSlotOccupied = out(Vec(Bits(config.sm.residentWarpsPerSubSm bits), config.sm.subSmCount))
   val subSmBoundWarpIds =
     out(Vec(Vec(UInt(config.sm.warpIdWidth bits), config.sm.residentWarpsPerSubSm), config.sm.subSmCount))
+  val subSmTcgen05Busy = out(Vec(Bool(), config.sm.subSmCount))
+  val subSmTcgen05States = out(Vec(UInt(4 bits), config.sm.subSmCount))
 }
 
 case class StreamingMultiprocessorIo(config: GpuConfig) extends Bundle {
@@ -122,4 +124,6 @@ class StreamingMultiprocessor(val config: GpuConfig = GpuConfig.default) extends
   io.debug.subSmSelectedPcs := executionCore.io.debug.subSmSelectedPcs
   io.debug.subSmSlotOccupied := executionCore.io.debug.subSmSlotOccupied
   io.debug.subSmBoundWarpIds := executionCore.io.debug.subSmBoundWarpIds
+  io.debug.subSmTcgen05Busy := executionCore.io.debug.subSmTcgen05Busy
+  io.debug.subSmTcgen05States := executionCore.io.debug.subSmTcgen05States
 }

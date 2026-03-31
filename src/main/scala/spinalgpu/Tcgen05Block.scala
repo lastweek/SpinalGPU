@@ -30,6 +30,7 @@ class Tcgen05Block(config: SmConfig) extends Component {
     val tensorMemRsp = slave(Stream(TensorMemRsp(config)))
     val ownsRegisterReads = out Bool()
     val busy = out Bool()
+    val debugState = out(UInt(4 bits))
   }
 
   private val fullWarpMask = B(Tcgen05Layouts.FullWarpMask32, config.warpSize bits)
@@ -146,6 +147,7 @@ class Tcgen05Block(config: SmConfig) extends Component {
   io.launch.ready := state === State.IDLE
   io.ownsRegisterReads := state === State.COLLECT0 || state === State.COLLECT1 || state === State.COLLECT2
   io.busy := state =/= State.IDLE
+  io.debugState := state.asBits.asUInt.resized
 
   io.readAddrA := U(0, config.registerAddressWidth bits)
   io.readAddrB := U(0, config.registerAddressWidth bits)

@@ -27,6 +27,8 @@ case class SmExecutionCoreDebugIo(config: SmConfig) extends Bundle {
   val subSmSelectedPcs = out(Vec(UInt(config.addressWidth bits), config.subSmCount))
   val subSmSlotOccupied = out(Vec(Bits(config.residentWarpsPerSubSm bits), config.subSmCount))
   val subSmBoundWarpIds = out(Vec(Vec(UInt(config.warpIdWidth bits), config.residentWarpsPerSubSm), config.subSmCount))
+  val subSmTcgen05Busy = out(Vec(Bool(), config.subSmCount))
+  val subSmTcgen05States = out(Vec(UInt(4 bits), config.subSmCount))
 }
 
 case class SmExecutionCoreIo(config: SmConfig) extends Bundle {
@@ -224,6 +226,8 @@ class SmExecutionCore(val config: SmConfig = SmConfig.default) extends Component
     io.debug.subSmSelectedPcs(subSm) := subSms(subSm).io.status.selectedPc
     io.debug.subSmSlotOccupied(subSm) := subSms(subSm).io.debug.slotOccupied
     io.debug.subSmBoundWarpIds(subSm) := subSms(subSm).io.debug.boundWarpIds
+    io.debug.subSmTcgen05Busy(subSm) := subSms(subSm).io.debug.tcgen05Busy
+    io.debug.subSmTcgen05States(subSm) := subSms(subSm).io.debug.tcgen05State
     scheduledWarpCandidates(subSm) := subSms(subSm).io.debug.scheduledWarp.valid
     fetchResponseCandidates(subSm) := subSms(subSm).io.debug.fetchResponse.valid
     decodedInstructionCandidates(subSm) := subSms(subSm).io.debug.decodedInstruction.valid

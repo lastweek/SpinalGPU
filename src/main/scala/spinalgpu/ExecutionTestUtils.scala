@@ -213,7 +213,7 @@ object ExecutionTestUtils {
     data
   }
 
-  def submitKernelCommand(bus: AxiLite4, clockDomain: ClockDomain, command: KernelCorpus.KernelCommand): Unit = {
+  def submitKernelCommand(bus: AxiLite4, clockDomain: ClockDomain, command: spinalgpu.toolchain.KernelCorpus.KernelCommand): Unit = {
     writeRegister(bus, clockDomain, ControlRegisters.EntryPc, BigInt(command.entryPc))
     writeRegister(bus, clockDomain, ControlRegisters.GridDimX, BigInt(command.gridDimX))
     writeRegister(bus, clockDomain, ControlRegisters.GridDimY, BigInt(command.gridDimY))

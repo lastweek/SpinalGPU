@@ -14,6 +14,8 @@ case class SubSmPartitionDebugIo(config: SmConfig) extends Bundle {
   val selectedPc = out(UInt(config.addressWidth bits))
   val slotOccupied = out(Bits(config.residentWarpsPerSubSm bits))
   val boundWarpIds = out(Vec(UInt(config.warpIdWidth bits), config.residentWarpsPerSubSm))
+  val tcgen05Busy = out(Bool())
+  val tcgen05State = out(UInt(4 bits))
 }
 
 class SubSmPartition(config: SmConfig) extends Component {
@@ -282,6 +284,8 @@ class SubSmPartition(config: SmConfig) extends Component {
   io.debug.engineState := io.status.engineState
   io.debug.selectedWarpId := io.status.selectedWarpId
   io.debug.selectedPc := io.status.selectedPc
+  io.debug.tcgen05Busy := tcgen05Block.io.busy
+  io.debug.tcgen05State := tcgen05Block.io.debugState
 
   slotTable.io.clearBindings := io.clearBindings
   slotTable.io.bind <> io.bind

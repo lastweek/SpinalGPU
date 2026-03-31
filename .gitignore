@@ -12,6 +12,8 @@ project/project/
 generated/
 simWorkspace/
 test_run_dir/
+spinalgpu/autoresearch-logs/*
+!spinalgpu/autoresearch-logs/.gitkeep
 
 *.vcd
 *.fst
